@@ -27,7 +27,7 @@ APK de desenvolvimento: `app/build/outputs/apk/debug/app-debug.apk`.
 - `ViewModel`, fluxos observados com ciclo de vida e restauração do campo e da busca com `SavedStateHandle`.
 - Layout com rolagem, insets do sistema e teclado. Sem músicas ou progresso fictícios em execução.
 
-O botão **Baixar vídeo** abre uma confirmação que explica o estágio atual e permite **salvar o link na fila**. A aplicação consulta os metadados públicos do YouTube; o download e a reprodução de mídia ainda não estão implementados. Os dados ilustrativos do FigCraft não são inseridos na biblioteca real.
+O botão **Baixar vídeo** confirma a gravação e inicia um download em segundo plano. A fila mostra progresso, cancelamento e nova tentativa; vídeos concluídos aparecem na biblioteca e podem ser abertos em um player do celular. Os dados ilustrativos do FigCraft não são inseridos na biblioteca real.
 
 ## Organização
 
@@ -48,13 +48,9 @@ As versões estão centralizadas em `gradle/libs.versions.toml`. O AGP 9 usa Kot
 
 ## Próximas etapas
 
-1. Definir o provedor que fornece o arquivo de mídia de um link. A consulta de metadados pelo oEmbed do YouTube já foi implementada.
-2. Evoluir `SpixRepository` com estados de download e arquivos locais; para uma fila maior, migrar a persistência para Room.
-3. Implementar downloads com WorkManager, cancelamento, retomada e tratamento de falhas.
-4. Integrar Media3, player, miniplayer e MediaSession para reprodução em segundo plano.
-5. Completar as telas de reprodução e de biblioteca preenchida do FigCraft com dados reais.
-
-Permissões de rede, notificações e serviços de reprodução devem ser adicionadas junto das respectivas funcionalidades. Esta base não solicita permissões desnecessárias.
+1. Integrar Media3, player, miniplayer e MediaSession para reprodução dentro do app.
+2. Adicionar escolha de qualidade e extração de áudio.
+3. Evoluir para Room se a fila crescer; aprimorar a retomada de arquivos parciais entre reinícios.
 
 ## Referências de configuração
 
@@ -75,11 +71,11 @@ Em Configurações → Aparência, escolha Sistema, Claro ou Escuro. A opção S
 Abra o ícone de configurações no cabeçalho de qualquer aba.
 
 - **Tema**: Sistema, Claro ou Escuro, aplicado imediatamente e persistido. As barras do Android também acompanham o tema escolhido.
-- **Onde salvar os vídeos**: pasta privativa do Spix por padrão, ou pasta escolhida com o seletor nativo do Android. O acesso concedido é persistido e verificado ao voltar à tela. Cancelar a escolha mantém o local anterior. É possível retornar à pasta padrão. A mudança vale para novos arquivos; não move ou apaga os existentes.
+- **Onde salvar os vídeos**: pasta pública Downloads/Spix por padrão, ou pasta escolhida com o seletor nativo do Android. O acesso concedido é persistido e verificado ao voltar à tela. Cancelar a escolha mantém o local anterior. É possível retornar à pasta padrão. A mudança vale para novos arquivos; não move ou apaga os existentes.
 - **Animações de navegação**: transições com fade e deslocamento curto entre abas e telas de detalhe, com entrada/saída animada da barra inferior. A preferência pode ser desligada. As animações do Compose também seguem a escala de animação do sistema.
 - **Sobre**: versão e estágio atual do aplicativo.
 
-`SettingsRepository` centraliza as preferências. `VideoStorage.createVideo()` e `writeVideo()` oferecem ao futuro módulo de downloads a criação e gravação de arquivos no destino configurado. Não são solicitadas permissões amplas de armazenamento. A implementação de downloads e reprodução continua pendente.
+`SettingsRepository` centraliza as preferências. `VideoStorage` grava na pasta pública usando MediaStore no Android 10+, sem permissão ampla, ou na pasta escolhida via SAF. No Android 8/9, solicita permissão de escrita para o destino público.
 
 ### Testar o armazenamento no emulador
 
@@ -113,8 +109,28 @@ Cole um link válido na tela inicial. Após uma pausa de 600 ms, o app consulta 
 - Links antigos na fila continuam legíveis. Consultar e confirmar um vídeo já salvo atualiza seus metadados sem duplicar o item.
 - O oEmbed não retorna duração nem tamanho do arquivo; esses campos não são estimados. Não há scraping de HTML nem execução do iframe retornado pelo serviço.
 
-A permissão `INTERNET` foi adicionada. Os vídeos em si ainda não são baixados ou reproduzidos.
+A permissão `INTERNET` permite a consulta e os downloads descritos abaixo.
 
 Validação: nove testes JVM passaram, incluindo HTTP simulado, cache, JSON inválido, cancelamento, debounce, tentativa após falha e proteção contra resultados atrasados. No emulador, um vídeo público real exibiu título/canal/miniatura, foi salvo na fila e teve os metadados restaurados após encerrar o processo. O item de teste foi removido ao final. Capturas: `design/android-video-preview.png` e `design/android-fila-com-metadados.png`.
 
 Referências: [oEmbed](https://oembed.com/), [rede no Android](https://developer.android.com/develop/connectivity/network-ops/connecting) e [Coil](https://coil-kt.github.io/coil/getting_started/).
+
+## Downloads e repositório local
+
+O Git está inicializado na branch `main`, sem remoto. O commit `f208cbf` preserva a interface anterior à implementação dos downloads. Builds, caches, caminhos locais e chaves ficam ignorados.
+
+- Motor Android `youtubedl-android`/FFmpeg 0.18.1; extrator oficial yt-dlp **2026.10.26**, incluído em `app/src/main/res/raw/ytdlp`. O recurso pode ser restaurado com `python3 scripts/vendor_ytdlp.py`. O SHA-256 é `e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3`, conferido com o release oficial. Não há atualização de executáveis em segundo plano.
+- WorkManager mantém tarefas únicas por vídeo, exige conexão e espaço disponível e publica uma notificação de serviço `dataSync`. O motor processa um vídeo por vez. A fila persiste metadados, estado, progresso e URI do arquivo.
+- MP4 com áudio, até 720p, limite de 2 GB. Lives e vídeos que exigem autenticação não são suportados. Bloqueios do YouTube aparecem como erro com nova tentativa, sem marcar o item como concluído.
+- A extração e a junção ocorrem no cache interno. Ao concluir, a gravação usa `MediaStore.Downloads` com `RELATIVE_PATH=Download/Spix/` e `IS_PENDING` no Android 10+. A publicação ocorre só depois de fechar a gravação. No Android 8/9, usa a mesma pasta pública com permissão de escrita.
+- A pasta padrão é **Downloads/Spix**. A pasta escolhida em Configurações usa a permissão SAF persistida. Mudar o destino não move vídeos existentes. Cancelamento ou falha remove arquivos públicos incompletos e o cache temporário dessa tarefa.
+- Cancelar interrompe o processo do extrator e limpa auxiliares nativos do mesmo UID; essa limpeza ocorre com o motor serializado, para não atingir outro download. Tentar novamente começa uma nova tentativa. O trabalho pode ser reexecutado pelo Android após interrupção; não há promessa de retomada byte a byte entre processos. Forçar a parada do app interrompe o serviço até o Android permitir nova execução.
+- A biblioteca contém somente arquivos concluídos. “Abrir” entrega a URI com permissão temporária a um player instalado. Remover da lista preserva o arquivo na pasta pública.
+
+A primeira preparação descompacta Python e FFmpeg; o APK universal de desenvolvimento inclui bibliotecas nativas de várias arquiteturas. Notificações são solicitadas no Android 13+; negá-las não impede a tarefa. No Android 8/9, negar armazenamento impede a gravação padrão e apresenta orientação.
+
+A licença GPL-3.0 da biblioteca está incluída em `assets/licenses/`. Fontes e avisos dos componentes: [wrapper Android](https://github.com/yausername/youtubedl-android), [yt-dlp fixado](https://github.com/yt-dlp/yt-dlp/releases/tag/2026.10.26). O projeto permanece apenas local.
+
+Nota de ferramentas: o detector `WebViewApiAvailability` do lint do AGP 9.2.1 apresentou uma falha interna ao inspecionar símbolos Kotlin das novas dependências. Esse detector está desativado; o app não usa WebViews. As demais checagens continuam ativas.
+
+Validação dos downloads: build debug, dez testes JVM e lint passaram. No emulador API 37, passaram os testes de persistência da biblioteca, gravação/leitura em Downloads/Spix sem sobrescrita e exclusão de arquivo parcial após erro. O teste de pasta SAF foi ignorado por não haver pasta personalizada selecionada nesta rodada. Um vídeo público real foi baixado e permaneceu concluído na biblioteca após encerrar e abrir o app. O MP4 foi conferido com ffprobe: 19,06 s, trilhas de vídeo e áudio, 533.915 bytes. Capturas: `design/android-download-concluido.png` e `design/android-biblioteca-video.png`.

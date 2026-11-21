@@ -18,6 +18,12 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SpixViewModelTest {
+    private val scheduled = mutableListOf<String>()
+    private class RecordingScheduler(private val scheduled: MutableList<String>) : com.pedroaba.spix.download.DownloadScheduler {
+        override suspend fun start(videoId: String) { scheduled += videoId }
+        override suspend fun cancel(videoId: String) = Unit
+    }
+    private val downloads = RecordingScheduler(scheduled)
     private val a = "dQw4w9WgXcQ"
     private val b = "jNQXAC9IVRw"
     private fun video(id: String) = VideoMetadata(id, "https://www.youtube.com/watch?v=$id", "Título $id", "Canal", null)
@@ -27,6 +33,7 @@ class SpixViewModelTest {
         override val tracks = MutableStateFlow<List<Track>>(emptyList())
         var added: VideoMetadata? = null
         override suspend fun enqueue(video: VideoMetadata): Boolean { added = video; return true }
+        override suspend fun updateDownload(videoId: String, transform: (DownloadRequest) -> DownloadRequest) = Unit
         override suspend fun removeRequest(videoId: String) = Unit
     }
 
@@ -38,7 +45,7 @@ class SpixViewModelTest {
             val second = CompletableDeferred<VideoMetadata>()
             val vm = SpixViewModel(Queue(), SavedStateHandle(), VideoMetadataSource { link ->
                 withContext(NonCancellable) { if (link.videoId == a) first.await() else second.await() }
-            })
+            }, downloads)
             store.put("vm", vm)
             vm.updateLink("https://youtu.be/$a"); advanceTimeBy(601); runCurrent()
             vm.updateLink("https://youtu.be/$b"); advanceTimeBy(601); runCurrent()
@@ -53,7 +60,7 @@ class SpixViewModelTest {
         val store = ViewModelStore()
         try {
             var calls = 0
-            val vm = SpixViewModel(Queue(), SavedStateHandle(), VideoMetadataSource { calls++; video(it.videoId) })
+            val vm = SpixViewModel(Queue(), SavedStateHandle(), VideoMetadataSource { calls++; video(it.videoId) }, downloads)
             store.put("vm", vm)
             vm.updateLink("https://youtu.be/$a"); advanceTimeBy(200)
             vm.updateLink("not a link"); advanceUntilIdle()
@@ -70,7 +77,7 @@ class SpixViewModelTest {
             val queue = Queue()
             val vm = SpixViewModel(queue, SavedStateHandle(), VideoMetadataSource {
                 if (calls++ == 0) throw IOException("offline") else video(it.videoId)
-            })
+            }, downloads)
             store.put("vm", vm)
             vm.updateLink("https://youtu.be/$a"); advanceUntilIdle()
             assertTrue(vm.preview.value is VideoPreviewState.Failed)
@@ -80,6 +87,7 @@ class SpixViewModelTest {
             assertTrue(vm.preview.value is VideoPreviewState.Ready)
             vm.enqueue(); advanceUntilIdle()
             assertEquals(video(a), queue.added)
+            assertEquals(listOf(a), scheduled)
             assertEquals("", vm.link.value)
             assertEquals(VideoPreviewState.Idle, vm.preview.value)
         } finally { store.clear(); Dispatchers.resetMain() }

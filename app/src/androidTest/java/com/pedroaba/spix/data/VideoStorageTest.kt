@@ -2,6 +2,8 @@ package com.pedroaba.spix.data
 
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.MediaStore
+import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -24,10 +26,17 @@ class VideoStorageTest {
             val storage = VideoStorage(context, preferences)
             repeat(2) { created += storage.createVideo("storage-test.mp4") }
             assertNotEquals(created[0], created[1])
-            assertEquals(preferences.defaultDirectory(), File(requireNotNull(created[0].path)).parentFile)
+            if (Build.VERSION.SDK_INT >= 29) {
+                assertEquals("content", created[0].scheme)
+                context.contentResolver.query(created[0], arrayOf(MediaStore.MediaColumns.RELATIVE_PATH), null, null, null)!!.use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    assertEquals("Download/Spix/", cursor.getString(0))
+                }
+            } else assertEquals(preferences.defaultDirectory(), File(requireNotNull(created[0].path)).parentFile)
             assertRoundTrip(storage, created[0])
         } finally {
-            created.forEach { File(requireNotNull(it.path)).delete() }
+            val storage = VideoStorage(context, preferences)
+            created.forEach { storage.deleteVideo(it) }
             if (original != null) preferences.selectFolder(Uri.parse(original))
         }
     }
@@ -43,6 +52,24 @@ class VideoStorageTest {
             assertRoundTrip(storage, uri)
         } finally {
             assertTrue(DocumentsContract.deleteDocument(context.contentResolver, uri))
+        }
+    }
+
+    @Test fun failedWriteRemovesThePartialPublicFile() = runBlocking {
+        val preferences = SettingsRepository(context)
+        val original = preferences.settings.value.videoFolderUri
+        preferences.useDefaultFolder()
+        val storage = VideoStorage(context, preferences)
+        val uri = storage.createVideo("spix-failed-write-test.mp4")
+        try {
+            try {
+                storage.writeVideo(uri) { it.write(byteArrayOf(1, 2)); throw java.io.IOException("simulated write failure") }
+                fail("Expected failure")
+            } catch (_: java.io.IOException) { }
+            assertTrue(runCatching { context.contentResolver.openInputStream(uri)?.use { it.read() } }.isFailure)
+        } finally {
+            runCatching { storage.deleteVideo(uri) }
+            if (original != null) preferences.selectFolder(Uri.parse(original))
         }
     }
 

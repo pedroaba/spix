@@ -15,6 +15,9 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    // AGP 9.2.1 crashes in this detector while inspecting WorkManager Kotlin symbols. No WebViews are used.
+    lint { disable += "WebViewApiAvailability" }
+    packaging { jniLibs.useLegacyPackaging = true }
     buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -39,6 +42,9 @@ dependencies {
     implementation(libs.lifecycle.compose)
     implementation(libs.lifecycle.viewmodel)
     implementation(libs.navigation.compose)
+    implementation(libs.work.runtime)
+    implementation(libs.youtubedl)
+    implementation(libs.ffmpeg)
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
     implementation(libs.coil.network)

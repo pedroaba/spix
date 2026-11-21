@@ -2,6 +2,8 @@ package com.pedroaba.spix.data
 
 import android.content.Context
 import com.pedroaba.spix.domain.DownloadRequest
+import com.pedroaba.spix.domain.DownloadStatus
+import com.pedroaba.spix.domain.MediaKind
 import com.pedroaba.spix.domain.Track
 import com.pedroaba.spix.domain.VideoMetadata
 import kotlinx.coroutines.Dispatchers
@@ -13,13 +15,14 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Persists requested links only. A future download worker will populate the offline library. */
+/** Durable queue and offline library; legacy saved links remain readable. */
 class LocalSpixRepository(context: Context) : SpixRepository {
     private val preferences = context.getSharedPreferences("spix", Context.MODE_PRIVATE)
     private val mutex = Mutex()
     private val mutableRequests = MutableStateFlow(readRequests())
     override val requests = mutableRequests.asStateFlow()
-    override val tracks = MutableStateFlow<List<Track>>(emptyList()).asStateFlow()
+    private val mutableTracks = MutableStateFlow(toTracks(mutableRequests.value))
+    override val tracks = mutableTracks.asStateFlow()
 
     override suspend fun enqueue(video: VideoMetadata): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
@@ -32,6 +35,10 @@ class LocalSpixRepository(context: Context) : SpixRepository {
         }
     }
 
+    override suspend fun updateDownload(videoId: String, transform: (DownloadRequest) -> DownloadRequest) = withContext(Dispatchers.IO) {
+        mutex.withLock { save(mutableRequests.value.map { if (it.videoId == videoId) transform(it) else it }) }
+    }
+
     override suspend fun removeRequest(videoId: String) = withContext(Dispatchers.IO) {
         mutex.withLock { save(mutableRequests.value.filterNot { it.videoId == videoId }) }
     }
@@ -39,7 +46,9 @@ class LocalSpixRepository(context: Context) : SpixRepository {
     private fun save(requests: List<DownloadRequest>) {
         val json = JSONArray().apply {
             requests.forEach { request ->
-                put(JSONObject().put("id", request.videoId).put("url", request.url).put("at", request.addedAt).apply {
+                put(JSONObject().put("id", request.videoId).put("url", request.url).put("at", request.addedAt)
+                    .put("status", request.status.name).put("progress", request.progress).put("error", request.error)
+                    .put("localUri", request.localUri).put("duration", request.duration).apply {
                     request.metadata?.let { video ->
                         put("metadata", JSONObject().put("title", video.title).put("author", video.author).put("thumbnail", video.thumbnailUrl))
                     }
@@ -48,6 +57,7 @@ class LocalSpixRepository(context: Context) : SpixRepository {
         }
         check(preferences.edit().putString("requests", json.toString()).commit()) { "Não foi possível salvar a fila." }
         mutableRequests.value = requests
+        mutableTracks.value = toTracks(requests)
     }
 
     private fun readRequests(): List<DownloadRequest> = runCatching {
@@ -62,7 +72,18 @@ class LocalSpixRepository(context: Context) : SpixRepository {
                 if (title.isBlank() || author.isBlank()) null else VideoMetadata(id, url, title, author,
                     data.optString("thumbnail").takeIf { it.startsWith("https://") })
             }
-            DownloadRequest(id, url, item.getLong("at"), metadata)
+            DownloadRequest(id, url, item.getLong("at"), metadata,
+                status = DownloadStatus.entries.firstOrNull { it.name == item.optString("status") } ?: DownloadStatus.Queued,
+                progress = item.optInt("progress").coerceIn(0, 100),
+                error = item.optString("error").takeIf { it.isNotBlank() && it != "null" },
+                localUri = item.optString("localUri").takeIf { it.isNotBlank() && it != "null" },
+                duration = item.optString("duration"))
         }
     }.getOrDefault(emptyList())
+
+    private fun toTracks(requests: List<DownloadRequest>) = requests.mapNotNull { item ->
+        if (item.status != DownloadStatus.Completed || item.localUri == null) null
+        else Track(item.videoId, item.metadata?.title ?: "Vídeo · ${item.videoId}", item.metadata?.author ?: "YouTube",
+            item.duration, item.localUri, MediaKind.Video)
+    }
 }

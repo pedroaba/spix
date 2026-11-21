@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
                 val style = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { dark }
                 enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
             }
-            SpixTheme(darkTheme = dark) { SpixApp(app.repository, app.settingsRepository, app.metadataRepository) }
+            SpixTheme(darkTheme = dark) { SpixApp(app.repository, app.settingsRepository, app.metadataRepository, app.downloadScheduler) }
         }
     }
 }

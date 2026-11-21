@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.pedroaba.spix.data.SpixRepository
 import com.pedroaba.spix.domain.YouTubeLink
 import com.pedroaba.spix.domain.VideoPreviewState
+import com.pedroaba.spix.domain.DownloadStatus
 import com.pedroaba.spix.data.VideoMetadataSource
 import com.pedroaba.spix.data.MetadataHttpException
 import java.net.SocketTimeoutException
@@ -25,7 +26,7 @@ sealed interface SpixEvent {
     data object LinkQueued : SpixEvent
 }
 
-class SpixViewModel(private val repository: SpixRepository, private val saved: SavedStateHandle, private val metadata: VideoMetadataSource) : ViewModel() {
+class SpixViewModel(private val repository: SpixRepository, private val saved: SavedStateHandle, private val metadata: VideoMetadataSource, private val downloads: com.pedroaba.spix.download.DownloadScheduler) : ViewModel() {
     val link = saved.getStateFlow("link", "")
     val query = saved.getStateFlow("query", "")
     val requests = repository.requests
@@ -106,21 +107,58 @@ class SpixViewModel(private val repository: SpixRepository, private val saved: S
         mutableBusy.value = true
         viewModelScope.launch {
             try {
-                if (repository.enqueue(video)) {
+                val added = repository.enqueue(video)
+                val existing = requests.value.firstOrNull { it.videoId == video.videoId }
+                if (existing?.status != DownloadStatus.Completed) {
+                    try { downloads.start(video.videoId) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (error: Exception) {
+                        repository.updateDownload(video.videoId) { it.copy(status = DownloadStatus.Failed, error = "Não foi possível iniciar. Tente novamente.") }
+                        throw error
+                    }
+                }
+                if (added) {
                     if (YouTubeLink.parse(link.value)?.videoId == video.videoId) updateLink("")
                     eventChannel.send(SpixEvent.LinkQueued)
-                } else eventChannel.send(SpixEvent.Message("Este vídeo já está na sua fila."))
+                } else eventChannel.send(SpixEvent.Message("Este vídeo já está nos seus downloads."))
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { eventChannel.send(SpixEvent.Message("Não foi possível salvar o link. Tente novamente.")) }
             finally { mutableBusy.value = false }
         }
     }
 
+    fun storagePermissionDenied() {
+        viewModelScope.launch { eventChannel.send(SpixEvent.Message("Permita o acesso ao armazenamento para salvar em Downloads/Spix.")) }
+    }
+
+    fun retry(videoId: String) {
+        viewModelScope.launch {
+            try {
+                repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Queued, progress = 0, error = null) }
+                downloads.start(videoId)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Failed, error = "Não foi possível iniciar. Tente novamente.") }
+                eventChannel.send(SpixEvent.Message("Não foi possível iniciar o download."))
+            }
+        }
+    }
+
+    fun cancel(videoId: String) {
+        viewModelScope.launch {
+            try {
+                downloads.cancel(videoId)
+                repository.updateDownload(videoId) { if (it.status == DownloadStatus.Completed) it else it.copy(status = DownloadStatus.Cancelled) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { eventChannel.send(SpixEvent.Message("Não foi possível cancelar o download.")) }
+        }
+    }
+
     fun remove(videoId: String) {
         viewModelScope.launch {
-            try { repository.removeRequest(videoId) }
+            try { downloads.cancel(videoId); repository.removeRequest(videoId) }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { eventChannel.send(SpixEvent.Message("Não foi possível remover o link. Tente novamente.")) }
+            catch (_: Exception) { eventChannel.send(SpixEvent.Message("Não foi possível remover o item.")) }
         }
     }
 }

@@ -86,11 +86,11 @@ fun SettingsScreen(
                     },
                 ) { Text(if (location.available) "Escolher pasta" else "Selecionar pasta novamente") }
                 if (location.isCustom) TextButton(onClick = onDefaultFolder, enabled = !busy, modifier = Modifier.padding(horizontal = 8.dp)) {
-                    Text("Usar pasta do Spix")
+                    Text("Usar Downloads/Spix")
                 }
                 Text(
                     if (location.isCustom) "Os próximos downloads usarão esta pasta. Arquivos existentes não serão movidos."
-                    else "Os arquivos da pasta do Spix são removidos ao desinstalar o app. Escolha outra pasta para mantê-los.",
+                    else "Os vídeos ficam em Downloads/Spix e permanecem no celular ao desinstalar o app.",
                     Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -118,7 +118,7 @@ fun SettingsScreen(
                     headlineContent = { Text("Spix") }, supportingContent = { Text("Versão 0.1.0 · Sua música, sem internet.") },
                     leadingContent = { Icon(SpixIcons.Info, null) }, colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 )
-                Text("Esta versão busca os dados dos vídeos e salva links na fila. Download e reprodução estarão disponíveis em uma próxima etapa.",
+                Text("Baixe vídeos, acompanhe o progresso e abra os arquivos em um player do celular.",
                     Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

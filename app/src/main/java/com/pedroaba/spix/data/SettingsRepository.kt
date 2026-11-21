@@ -67,9 +67,10 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    fun defaultDirectory(): File = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir, "Spix")
+    @Suppress("DEPRECATION")
+    fun defaultDirectory(): File = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Spix")
 
-    private fun defaultLocation() = StorageLocation("Pasta do Spix", defaultDirectory().absolutePath, false)
+    private fun defaultLocation() = StorageLocation("Downloads/Spix", "Armazenamento do dispositivo · Downloads/Spix", false)
 
     private fun inspectFolder(uri: Uri): StorageLocation {
         val granted = context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission && it.isWritePermission }

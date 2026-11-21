@@ -9,5 +9,6 @@ interface SpixRepository {
     val requests: StateFlow<List<DownloadRequest>>
     val tracks: StateFlow<List<Track>>
     suspend fun enqueue(video: VideoMetadata): Boolean
+    suspend fun updateDownload(videoId: String, transform: (DownloadRequest) -> DownloadRequest)
     suspend fun removeRequest(videoId: String)
 }

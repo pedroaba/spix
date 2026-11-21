@@ -1,6 +1,14 @@
 package com.pedroaba.spix.ui
 
 import androidx.compose.foundation.layout.*
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import com.pedroaba.spix.download.DownloadScheduler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -39,9 +47,9 @@ private enum class Destination(val label: String, val icon: ImageVector, val sel
 }
 
 @Composable
-fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, metadata: VideoMetadataSource) {
+fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, metadata: VideoMetadataSource, downloads: DownloadScheduler) {
     val vm: SpixViewModel = viewModel(factory = viewModelFactory {
-        initializer { SpixViewModel(repository, createSavedStateHandle(), metadata) }
+        initializer { SpixViewModel(repository, createSavedStateHandle(), metadata, downloads) }
     })
     val settingsVm: SettingsViewModel = viewModel(factory = viewModelFactory {
         initializer { SettingsViewModel(settingsRepository) }
@@ -60,6 +68,20 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
     val error by vm.error.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
     val preview by vm.preview.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (Build.VERSION.SDK_INT >= 29 || granted[Manifest.permission.WRITE_EXTERNAL_STORAGE] == true) vm.enqueue()
+        else vm.storagePermissionDenied()
+    }
+    fun startDownload() {
+        val permissions = buildList {
+            if (Build.VERSION.SDK_INT <= 28 && ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)
+                add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (permissions.isEmpty()) vm.enqueue() else permissionLauncher.launch(permissions.toTypedArray())
+    }
     val readyVideo = (preview as? VideoPreviewState.Ready)?.video
     val snackbar = remember { SnackbarHostState() }
     var showConfirmation by rememberSaveable { mutableStateOf(false) }
@@ -75,7 +97,7 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
     LaunchedEffect(vm) {
         vm.events.collect { event ->
             when (event) {
-                SpixEvent.LinkQueued -> { navigate(Destination.Downloads); snackbar.showSnackbar("Link salvo na fila.") }
+                SpixEvent.LinkQueued -> { navigate(Destination.Downloads); snackbar.showSnackbar("Download adicionado à fila.") }
                 is SpixEvent.Message -> snackbar.showSnackbar(event.text)
             }
         }
@@ -131,11 +153,11 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
             ) {
                 composable(Destination.Home.name) {
                     TabScreen({ open("search") }, { open("settings") }) {
-                        HomeScreen(link, error, busy, preview, motion, vm::updateLink, vm::searchVideo) { showConfirmation = true }
+                        HomeScreen(link, error, busy, preview, motion, tracks.size, vm::updateLink, vm::searchVideo) { showConfirmation = true }
                     }
                 }
                 composable(Destination.Downloads.name) {
-                    TabScreen({ open("search") }, { open("settings") }) { DownloadsScreen(requests, vm::remove) }
+                    TabScreen({ open("search") }, { open("settings") }) { DownloadsScreen(requests, vm::remove, vm::retry, vm::cancel) }
                 }
                 composable(Destination.Library.name) {
                     TabScreen({ open("search") }, { open("settings") }) { LibraryScreen(tracks) }
@@ -150,13 +172,13 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
         }
     }
     if (showConfirmation && readyVideo != null) AlertDialog(onDismissRequest = { showConfirmation = false },
-        title = { Text("Salvar link para baixar depois?") },
+        title = { Text("Baixar este vídeo?") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(readyVideo.title, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
             Text(readyVideo.author, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("O download de vídeos ainda não está disponível nesta versão. Você pode salvar este vídeo na fila.")
+            Text("O vídeo será salvo em ${location.name}. Qualidade de até 720p, com áudio.")
         } },
-        confirmButton = { TextButton(onClick = { showConfirmation = false; vm.enqueue() }, enabled = !busy) { Text("Salvar na fila") } },
+        confirmButton = { TextButton(onClick = { showConfirmation = false; startDownload() }, enabled = !busy) { Text("Baixar vídeo") } },
         dismissButton = { TextButton(onClick = { showConfirmation = false }) { Text("Cancelar") } })
 }
 

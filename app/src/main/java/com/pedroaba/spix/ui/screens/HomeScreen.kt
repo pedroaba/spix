@@ -20,7 +20,7 @@ import com.pedroaba.spix.ui.theme.SpixColors
 import com.pedroaba.spix.domain.VideoPreviewState
 
 @Composable
-fun HomeScreen(link: String, error: String?, busy: Boolean, preview: VideoPreviewState, motion: Boolean, onLink: (String) -> Unit, onSearch: () -> Unit, onSubmit: () -> Unit) {
+fun HomeScreen(link: String, error: String?, busy: Boolean, preview: VideoPreviewState, motion: Boolean, libraryCount: Int, onLink: (String) -> Unit, onSearch: () -> Unit, onSubmit: () -> Unit) {
     val keyboard = LocalSoftwareKeyboardController.current
     val loading = preview is VideoPreviewState.Loading
     fun submit() {
@@ -53,9 +53,10 @@ fun HomeScreen(link: String, error: String?, busy: Boolean, preview: VideoPrevie
         Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Sua biblioteca", fontSize = 21.sp, fontWeight = FontWeight.Bold)
-            Text("0 músicas", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            Text("$libraryCount ${if (libraryCount == 1) "item" else "itens"}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         }
         LibraryFilters()
-        EmptyState(SpixIcons.Headphones, "Sua biblioteca começa aqui", "Cole um link do YouTube acima para adicionar sua primeira música.")
+        if (libraryCount == 0) EmptyState(SpixIcons.Headphones, "Sua biblioteca começa aqui", "Cole um link do YouTube acima para adicionar seu primeiro vídeo.")
+        else Text("Seus vídeos estão disponíveis na aba Biblioteca.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

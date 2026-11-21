@@ -8,7 +8,12 @@ data class VideoMetadata(
     val thumbnailUrl: String?,
 )
 
-data class DownloadRequest(val videoId: String, val url: String, val addedAt: Long, val metadata: VideoMetadata? = null)
+enum class DownloadStatus { Queued, Downloading, Saving, Completed, Failed, Cancelled }
+data class DownloadRequest(
+    val videoId: String, val url: String, val addedAt: Long, val metadata: VideoMetadata? = null,
+    val status: DownloadStatus = DownloadStatus.Queued, val progress: Int = 0,
+    val error: String? = null, val localUri: String? = null, val duration: String = "",
+)
 
 sealed interface VideoPreviewState {
     data object Idle : VideoPreviewState

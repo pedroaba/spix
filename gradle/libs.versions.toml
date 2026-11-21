@@ -13,7 +13,13 @@ okhttp = "4.12.0"
 coroutines = "1.10.2"
 json = "20240303"
 
+work = "2.11.2"
+youtubedl = "0.18.1"
+
 [libraries]
+work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+youtubedl = { module = "io.github.junkfood02.youtubedl-android:library", version.ref = "youtubedl" }
+ffmpeg = { module = "io.github.junkfood02.youtubedl-android:ffmpeg", version.ref = "youtubedl" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-ui = { module = "androidx.compose.ui:ui" }
 compose-foundation = { module = "androidx.compose.foundation:foundation" }

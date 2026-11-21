@@ -22,11 +22,11 @@ fun LibraryScreen(tracks: List<Track>) {
     var filter by rememberSaveable { mutableStateOf("Todas") }
     val visibleTracks = tracks.filter { filter == "Todas" || (filter == "Músicas" && it.kind == MediaKind.Music) || (filter == "Vídeos" && it.kind == MediaKind.Video) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        PageTitle("Sua biblioteca", "${tracks.size} músicas · disponíveis offline")
+        PageTitle("Sua biblioteca", "${tracks.size} ${if (tracks.size == 1) "item disponível" else "itens disponíveis"} offline")
         LibraryFilters { filter = it }
-        if (tracks.isEmpty()) EmptyState(SpixIcons.Headphones, "Sua biblioteca começa aqui", "Suas músicas aparecerão aqui quando os downloads estiverem disponíveis.")
+        if (tracks.isEmpty()) EmptyState(SpixIcons.Headphones, "Sua biblioteca começa aqui", "Os vídeos baixados aparecerão aqui.")
         else if (visibleTracks.isEmpty()) EmptyState(SpixIcons.Library, "Nenhum item neste filtro", "Escolha outro filtro para ver seu conteúdo.")
-        else visibleTracks.forEach { track -> ListItem(headlineContent = { Text(track.title) }, supportingContent = { Text("${track.artist} · ${track.duration}") }, trailingContent = { Icon(SpixIcons.Offline, "Disponível offline") }) }
+        else visibleTracks.forEach { track -> ListItem(headlineContent = { Text(track.title) }, supportingContent = { Text(listOf(track.artist, track.duration).filter { it.isNotBlank() }.joinToString(" · ")) }, trailingContent = { OpenVideoButton(track.localUri) }) }
     }
 }
 
