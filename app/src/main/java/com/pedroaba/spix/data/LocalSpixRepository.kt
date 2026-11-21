@@ -2,6 +2,8 @@ package com.pedroaba.spix.data
 
 import android.content.Context
 import com.pedroaba.spix.domain.DownloadRequest
+import com.pedroaba.spix.domain.DownloadTransfer
+import com.pedroaba.spix.domain.TransferKind
 import com.pedroaba.spix.domain.DownloadStatus
 import com.pedroaba.spix.domain.MediaKind
 import com.pedroaba.spix.domain.Track
@@ -49,6 +51,11 @@ class LocalSpixRepository(context: Context) : SpixRepository {
                 put(JSONObject().put("id", request.videoId).put("url", request.url).put("at", request.addedAt)
                     .put("status", request.status.name).put("progress", request.progress).put("error", request.error)
                     .put("localUri", request.localUri).put("duration", request.duration).apply {
+                    request.transfer?.let { transfer ->
+                        put("transfer", JSONObject().put("bytes", transfer.downloadedBytes).put("total", transfer.totalBytes)
+                            .put("estimate", transfer.totalIsEstimate).put("speed", transfer.speedBytesPerSecond)
+                            .put("eta", transfer.etaSeconds).put("kind", transfer.kind.name))
+                    }
                     request.metadata?.let { video ->
                         put("metadata", JSONObject().put("title", video.title).put("author", video.author).put("thumbnail", video.thumbnailUrl))
                     }
@@ -77,7 +84,15 @@ class LocalSpixRepository(context: Context) : SpixRepository {
                 progress = item.optInt("progress").coerceIn(0, 100),
                 error = item.optString("error").takeIf { it.isNotBlank() && it != "null" },
                 localUri = item.optString("localUri").takeIf { it.isNotBlank() && it != "null" },
-                duration = item.optString("duration"))
+                duration = item.optString("duration"),
+                transfer = item.optJSONObject("transfer")?.let { data ->
+                    DownloadTransfer(data.optLong("bytes").coerceAtLeast(0),
+                        totalBytes = data.optLong("total").takeIf { it > 0 },
+                        totalIsEstimate = data.optBoolean("estimate"),
+                        speedBytesPerSecond = data.optDouble("speed").takeIf { it.isFinite() && it > 0 },
+                        etaSeconds = if (data.has("eta") && !data.isNull("eta")) data.optLong("eta").takeIf { it >= 0 } else null,
+                        kind = TransferKind.entries.firstOrNull { it.name == data.optString("kind") } ?: TransferKind.Media)
+                })
         }
     }.getOrDefault(emptyList())
 

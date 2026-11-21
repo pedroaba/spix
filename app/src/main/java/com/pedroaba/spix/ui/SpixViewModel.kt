@@ -134,7 +134,7 @@ class SpixViewModel(private val repository: SpixRepository, private val saved: S
     fun retry(videoId: String) {
         viewModelScope.launch {
             try {
-                repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Queued, progress = 0, error = null) }
+                repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Queued, progress = 0, error = null, transfer = null) }
                 downloads.start(videoId)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {

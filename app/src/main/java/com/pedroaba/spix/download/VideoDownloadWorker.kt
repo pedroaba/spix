@@ -17,6 +17,8 @@ import com.pedroaba.spix.SpixApplication
 import com.pedroaba.spix.domain.DownloadStatus
 import java.io.File
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import com.pedroaba.spix.domain.DownloadTransfer
 
 class VideoDownloadWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     private val app = context.applicationContext as SpixApplication
@@ -30,21 +32,16 @@ class VideoDownloadWorker(context: Context, parameters: WorkerParameters) : Coro
         var published: Uri? = null
         var committed = false
         try {
-            setForeground(foreground(item.metadata?.title ?: "Vídeo do YouTube", 0))
-            app.repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Downloading, progress = 0, error = null) }
-            var lastUpdate = 0L
-            val file = app.downloader.download(item.url, directory, id.toString()) { progress ->
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (now - lastUpdate >= 1000) {
-                    lastUpdate = now
-                    runBlocking {
-                        app.repository.updateDownload(videoId) { it.copy(progress = progress) }
-                        setForeground(foreground(item.metadata?.title ?: "Vídeo do YouTube", progress))
-                    }
-                }
-            }
+            applicationContext.getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel("downloads", "Downloads", NotificationManager.IMPORTANCE_LOW)
+            )
+            val title = item.metadata?.title ?: "Vídeo do YouTube"
+            setForeground(foreground(title, DownloadStatus.Queued))
+            app.repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Queued, progress = 0, error = null, transfer = null) }
+            val file = downloadWithProgress(videoId, item.url, title, directory)
             currentCoroutineContext().ensureActive()
-            app.repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Saving, progress = 100) }
+            app.repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Saving, progress = 0, transfer = null) }
+            setForeground(foreground(title, DownloadStatus.Saving))
             val duration = withContext(Dispatchers.IO) {
                 runCatching {
                     val retriever = MediaMetadataRetriever()
@@ -71,7 +68,7 @@ class VideoDownloadWorker(context: Context, parameters: WorkerParameters) : Coro
             }
             currentCoroutineContext().ensureActive()
             withContext(NonCancellable) {
-                app.repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Completed, progress = 100, localUri = published.toString(), duration = duration, error = null) }
+                app.repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Completed, progress = 100, localUri = published.toString(), duration = duration, error = null, transfer = null) }
                 committed = true
             }
             return Result.success()
@@ -92,15 +89,48 @@ class VideoDownloadWorker(context: Context, parameters: WorkerParameters) : Coro
         }
     }
 
-    private fun foreground(title: String, progress: Int): ForegroundInfo {
-        val manager = applicationContext.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel("downloads", "Downloads", NotificationManager.IMPORTANCE_LOW))
+    private suspend fun downloadWithProgress(videoId: String, url: String, title: String, directory: File): File = coroutineScope {
+        // The native output reader must never wait for disk writes or notification IPC.
+        val updates = Channel<DownloadUpdate>(Channel.CONFLATED)
+        val publisher = launch(Dispatchers.IO) {
+            val gate = ProgressUpdateGate()
+            var previous: DownloadUpdate? = null
+            var lastNotification = 0L
+            for (update in updates) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (!gate.accept(update, now)) continue
+                val status = when (update) {
+                    DownloadUpdate.Preparing -> DownloadStatus.Preparing
+                    is DownloadUpdate.Transfer -> DownloadStatus.Downloading
+                    DownloadUpdate.Processing -> DownloadStatus.Processing
+                }
+                val transfer = (update as? DownloadUpdate.Transfer)?.data
+                app.repository.updateDownload(videoId) { it.copy(status = status, progress = transfer?.percent ?: 0, transfer = transfer) }
+                val phaseChanged = previous?.javaClass != update.javaClass ||
+                    (previous as? DownloadUpdate.Transfer)?.data?.kind != transfer?.kind
+                if (phaseChanged || now - lastNotification >= 1000 || transfer?.percent == 100) {
+                    setForeground(foreground(title, status, transfer))
+                    lastNotification = now
+                }
+                previous = update
+            }
+        }
+        try { app.downloader.download(url, directory, id.toString()) { updates.trySend(it) } }
+        finally {
+            // Flush the last transfer/stage before Saving or a terminal state can be persisted.
+            updates.close()
+            publisher.join()
+        }
+    }
+
+    private fun foreground(title: String, status: DownloadStatus, transfer: DownloadTransfer? = null): ForegroundInfo {
         val open = PendingIntent.getActivity(applicationContext, 0, Intent(applicationContext, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val cancel = WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
+        val percent = transfer?.percent
         val notification = Notification.Builder(applicationContext, "downloads")
             .setSmallIcon(R.drawable.ic_download_notification).setContentTitle(title)
-            .setContentText(if (progress == 0) "Preparando download…" else "Baixando · $progress%")
-            .setProgress(100, progress, progress == 0).setOnlyAlertOnce(true).setOngoing(true)
+            .setContentText(downloadStageLabel(status, transfer))
+            .setProgress(100, percent ?: 0, percent == null).setOnlyAlertOnce(true).setOngoing(true)
             .setContentIntent(open).addAction(Notification.Action.Builder(null, "Cancelar", cancel).build()).build()
         return if (Build.VERSION.SDK_INT >= 29) ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         else ForegroundInfo(notificationId, notification)

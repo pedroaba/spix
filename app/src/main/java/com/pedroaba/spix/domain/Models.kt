@@ -8,11 +8,25 @@ data class VideoMetadata(
     val thumbnailUrl: String?,
 )
 
-enum class DownloadStatus { Queued, Downloading, Saving, Completed, Failed, Cancelled }
+enum class DownloadStatus { Queued, Preparing, Downloading, Processing, Saving, Completed, Failed, Cancelled }
+enum class TransferKind { Video, Audio, Media }
+data class DownloadTransfer(
+    val downloadedBytes: Long,
+    val totalBytes: Long? = null,
+    val totalIsEstimate: Boolean = false,
+    val speedBytesPerSecond: Double? = null,
+    val etaSeconds: Long? = null,
+    val kind: TransferKind = TransferKind.Media,
+) {
+    val percent: Int? get() = totalBytes?.takeIf { it > 0 }?.let {
+        (downloadedBytes.toDouble() / it * 100).toInt().coerceIn(0, 100)
+    }
+}
 data class DownloadRequest(
     val videoId: String, val url: String, val addedAt: Long, val metadata: VideoMetadata? = null,
     val status: DownloadStatus = DownloadStatus.Queued, val progress: Int = 0,
     val error: String? = null, val localUri: String? = null, val duration: String = "",
+    val transfer: DownloadTransfer? = null,
 )
 
 sealed interface VideoPreviewState {

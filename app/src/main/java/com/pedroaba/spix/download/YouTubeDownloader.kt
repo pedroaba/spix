@@ -6,6 +6,9 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.ffmpeg.FFmpeg
 import java.io.File
+import java.io.IOException
+import java.util.concurrent.atomic.AtomicReference
+import com.yausername.youtubedl_android.YoutubeDLException
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -13,7 +16,8 @@ import kotlinx.coroutines.sync.withLock
 class YouTubeDownloader(private val context: Context) {
     private val gate = Mutex()
 
-    suspend fun download(url: String, directory: File, processId: String, progress: (Int) -> Unit): File = gate.withLock {
+    internal suspend fun download(url: String, directory: File, processId: String, progress: (DownloadUpdate) -> Unit): File = gate.withLock {
+        progress(DownloadUpdate.Preparing)
         withContext(Dispatchers.IO) {
             // Pin the extractor separately from the Android native runtime bundled by the wrapper.
             val extractor = File(context.noBackupFilesDir, "${YoutubeDL.baseName}/${YoutubeDL.ytdlpDirName}/${YoutubeDL.ytdlpBin}")
@@ -35,6 +39,11 @@ class YouTubeDownloader(private val context: Context) {
                     addOption("--no-playlist")
                     addOption("--newline")
                     addOption("--progress")
+                    addOption("--progress-delta", "0.25")
+                    addOption("--no-colors")
+                    addOption("--output-na-placeholder", "null")
+                    addOption("--progress-template", DownloadProgressParser.DOWNLOAD_TEMPLATE)
+                    addOption("--progress-template", DownloadProgressParser.PROCESSING_TEMPLATE)
                     addOption("--ignore-config")
                     addOption("--no-mtime")
                     addOption("--socket-timeout", 20)
@@ -47,8 +56,16 @@ class YouTubeDownloader(private val context: Context) {
                     addOption("--remux-video", "mp4")
                     addOption("-o", File(directory, "video.%(ext)s").absolutePath)
                 }
-                YoutubeDL.getInstance().execute(request, processId) { value, _, _ ->
-                    progress(value.toInt().coerceIn(0, 99))
+                // Both output channels must reach the callback; ignore the wrapper's terminal-text percentage parser.
+                val lastError = AtomicReference<String?>(null)
+                try {
+                    YoutubeDL.getInstance().execute(request, processId, redirectErrorStream = true) { _, _, line ->
+                        if (line.trimStart().startsWith("ERROR:")) lastError.set(line.take(1200))
+                        DownloadProgressParser.parse(line)?.let(progress)
+                    }
+                } catch (error: YoutubeDLException) {
+                    // The wrapper reads its error message from stderr, which is empty when streams are merged.
+                    throw IOException(lastError.get() ?: error.message ?: "Falha no download.", error)
                 }
                 File(directory, "video.mp4").also {
                     check(it.isFile && it.length() > 0) { "O download não gerou um vídeo válido." }

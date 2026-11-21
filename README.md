@@ -162,3 +162,22 @@ O script faz duas voltas de aquecimento, zera os contadores HWUI e percorre 35 t
 Referência: [desempenho no Jetpack Compose](https://developer.android.com/develop/ui/compose/performance).
 
 Validação em 04/11/2026 no Galaxy A52 (Android 14): duas coletas da navegação anterior registraram 7,56–8,50% de quadros atrasados; com o fade-through, as duas coletas ficaram em 6,24–6,60%. O percentil 90 passou de 15–18 ms para 13 ms. Ambas as versões foram otimizadas e compiladas com ART `speed`; os números são diagnósticos desse fluxo e aparelho. Build debug/otimizado, dez testes JVM e lint passaram. As preferências e os arquivos existentes do celular foram preservados.
+
+## Progresso real dos downloads
+
+A fila distingue preparação, transferência, finalização do arquivo e gravação no dispositivo. Durante a transferência, mostra porcentagem, bytes recebidos, tamanho total, velocidade e tempo restante conforme os dados disponíveis. Quando o YouTube entrega vídeo e áudio separados, cada mídia mostra seu próprio avanço. Totais estimados recebem `≈`; sem um tamanho conhecido, a interface mostra os bytes transferidos com barra indeterminada, sem inventar uma porcentagem.
+
+O motor publica hooks JSON com `--progress-template`, placeholder `null` para campos ausentes e os canais stdout/stderr unidos no callback. O app interpreta os números diretamente e não depende do texto da porcentagem/ETA do terminal. A leitura do processo envia eventos a um canal conflado; gravações e notificações acontecem fora do leitor nativo. A UI recebe até uma atualização a cada 400 ms, com atualização imediata ao começar, trocar de mídia/etapa e terminar uma transferência. Notificações também recebem a etapa e o percentual. A conclusão de uma trilha não marca o download inteiro como concluído; a conclusão só ocorre após salvar o arquivo.
+
+Os detalhes de transferência são persistidos junto da fila. Pedidos antigos continuam legíveis. Nova tentativa limpa o progresso anterior.
+
+Validação: 15 testes JVM e lint passaram. Os novos testes cobrem bytes reais, total desconhecido/estimado, etapas de áudio/vídeo, linhas inválidas e entrega dos eventos finais mesmo em transferências rápidas. O check abaixo roda o extrator fixado contra um servidor local lento, gera um MP4 sintético com FFmpeg e verifica eventos intermediários e integridade do arquivo, sem depender do YouTube:
+
+```sh
+# Requer Python 3.11+ e FFmpeg no PATH.
+python3 scripts/check_download_progress.py
+```
+
+Na validação foram observados sete eventos de transferência (de 1.024 até 603.531 bytes) e quatro eventos de pós-processamento.
+
+No Galaxy A52, um download real foi gravado e conferido quadro a quadro: a UI exibiu vídeo (224 kB) e áudio (309 kB) com percentuais, bytes, velocidade e ETA, seguidos das etapas de finalização e gravação. A transferência era curta o suficiente para os estados ocorrerem entre as consultas do UIAutomator, e a gravação confirmou os estados intermediários. A barra acompanha o fim de cada trilha imediatamente, sem esperar a suavização dos valores intermediários. O item e o arquivo criados no teste foram removidos; o download anterior do usuário foi preservado.
