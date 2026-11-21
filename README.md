@@ -27,7 +27,7 @@ APK de desenvolvimento: `app/build/outputs/apk/debug/app-debug.apk`.
 - `ViewModel`, fluxos observados com ciclo de vida e restauração do campo e da busca com `SavedStateHandle`.
 - Layout com rolagem, insets do sistema e teclado. Sem músicas ou progresso fictícios em execução.
 
-O botão **Baixar vídeo** confirma a gravação e inicia um download em segundo plano. A fila mostra progresso, cancelamento e nova tentativa; vídeos concluídos aparecem na biblioteca e podem ser abertos em um player do celular. Os dados ilustrativos do FigCraft não são inseridos na biblioteca real.
+O botão **Baixar vídeo** confirma a gravação e inicia um download em segundo plano. A fila mostra progresso, cancelamento e nova tentativa; vídeos concluídos aparecem na biblioteca e podem ser reproduzidos no player interno. Os dados ilustrativos do FigCraft não são inseridos na biblioteca real.
 
 ## Organização
 
@@ -48,7 +48,7 @@ As versões estão centralizadas em `gradle/libs.versions.toml`. O AGP 9 usa Kot
 
 ## Próximas etapas
 
-1. Integrar Media3, player, miniplayer e MediaSession para reprodução dentro do app.
+1. Persistir fila e posição para retomada após encerrar o processo.
 2. Adicionar escolha de qualidade e extração de áudio.
 3. Evoluir para Room se a fila crescer; aprimorar a retomada de arquivos parciais entre reinícios.
 
@@ -125,7 +125,7 @@ O Git está inicializado na branch `main`, sem remoto. O commit `f208cbf` preser
 - A extração e a junção ocorrem no cache interno. Ao concluir, a gravação usa `MediaStore.Downloads` com `RELATIVE_PATH=Download/Spix/` e `IS_PENDING` no Android 10+. A publicação ocorre só depois de fechar a gravação. No Android 8/9, usa a mesma pasta pública com permissão de escrita.
 - A pasta padrão é **Downloads/Spix**. A pasta escolhida em Configurações usa a permissão SAF persistida. Mudar o destino não move vídeos existentes. Cancelamento ou falha remove arquivos públicos incompletos e o cache temporário dessa tarefa.
 - Cancelar interrompe o processo do extrator e limpa auxiliares nativos do mesmo UID; essa limpeza ocorre com o motor serializado, para não atingir outro download. Tentar novamente começa uma nova tentativa. O trabalho pode ser reexecutado pelo Android após interrupção; não há promessa de retomada byte a byte entre processos. Forçar a parada do app interrompe o serviço até o Android permitir nova execução.
-- A biblioteca contém somente arquivos concluídos. “Abrir” entrega a URI com permissão temporária a um player instalado. Remover da lista preserva o arquivo na pasta pública.
+- A biblioteca contém somente arquivos concluídos. “Reproduzir” abre o player interno com a fila offline. Remover da lista preserva o arquivo na pasta pública.
 
 A primeira preparação descompacta Python e FFmpeg; o APK universal de desenvolvimento inclui bibliotecas nativas de várias arquiteturas. Notificações são solicitadas no Android 13+; negá-las não impede a tarefa. No Android 8/9, negar armazenamento impede a gravação padrão e apresenta orientação.
 
@@ -181,3 +181,15 @@ python3 scripts/check_download_progress.py
 Na validação foram observados sete eventos de transferência (de 1.024 até 603.531 bytes) e quatro eventos de pós-processamento.
 
 No Galaxy A52, um download real foi gravado e conferido quadro a quadro: a UI exibiu vídeo (224 kB) e áudio (309 kB) com percentuais, bytes, velocidade e ETA, seguidos das etapas de finalização e gravação. A transferência era curta o suficiente para os estados ocorrerem entre as consultas do UIAutomator, e a gravação confirmou os estados intermediários. A barra acompanha o fim de cada trilha imediatamente, sem esperar a suavização dos valores intermediários. O item e o arquivo criados no teste foram removidos; o download anterior do usuário foi preservado.
+
+## Player interno de música e vídeo
+
+Os botões “Reproduzir” da home, biblioteca, downloads e busca abrem o player do Spix, inspirado na referência do YouTube Music. A tela usa fundo preto, seletor Música/Vídeo, capa ou vídeo centralizado, título/canal, progresso com tempos válidos, play/pause, anterior/próximo, aleatório, repetição e fila “A seguir”. O menu permite abrir a fila, reiniciar a faixa ou encerrar a reprodução. Os ícones são Fluent oficiais.
+
+O Media3 1.11.1 mantém o ExoPlayer em um MediaSessionService com foco de áudio, tratamento da desconexão de fones, wake lock local e controles de mídia do Android. Música desabilita a trilha de vídeo do mesmo MP4; Vídeo reabilita a renderização mantendo a posição. Ao minimizar ou colocar o app em segundo plano, o áudio continua e a renderização de vídeo é desativada. O miniplayer permite reabrir, pausar e encerrar a sessão. A fila é criada a partir dos arquivos concluídos; não há reprodução de links pendentes nem download adicional para escutar.
+
+O progresso é observado em um fluxo separado, somente enquanto a interface o observa, evitando recompor capa, controles e navegação a cada atualização do relógio. A troca de superfície usa a integração do PlayerView com Compose. A retomada persistida após morte do processo continua como etapa futura.
+
+Validação: build debug/otimizado, 18 testes JVM e lint passaram. No Galaxy A52 foram conferidos áudio, vídeo, troca de modo sem reiniciar posição, miniplayer, fila, ciclo de repetição e reinício da faixa. Ao deixar o app em segundo plano, a posição passou de 0:27 para 0:36 e o serviço permaneceu em foreground `mediaPlayback`. Capturas reais: `design/android-player-musica.png` e `design/android-player-video.png`.
+
+Referência técnica: [MediaSessionService e reprodução em segundo plano](https://developer.android.com/media/media3/session/background-playback).

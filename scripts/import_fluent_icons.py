@@ -32,6 +32,14 @@ ICONS = {
     'System': ('Phone', 'phone', 'regular'),
     'Motion': ('Slide Transition', 'slide_transition', 'regular'),
     'Info': ('Info', 'info', 'regular'),
+    'Play': ('Play', 'play', 'filled'),
+    'Pause': ('Pause', 'pause', 'filled'),
+    'Previous': ('Previous', 'previous', 'filled'),
+    'Next': ('Next', 'next', 'filled'),
+    'Shuffle': ('Arrow Shuffle', 'arrow_shuffle', 'regular'),
+    'Repeat': ('Arrow Repeat All', 'arrow_repeat_all', 'regular'),
+    'Collapse': ('Chevron Down', 'chevron_down', 'regular'),
+    'MoreVertical': ('More Vertical', 'more_vertical', 'regular'),
 }
 
 def fetch(path):

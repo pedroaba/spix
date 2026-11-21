@@ -1,6 +1,9 @@
 package com.pedroaba.spix.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.graphics.Color
+import com.pedroaba.spix.playback.*
+import android.app.Application
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -44,7 +47,7 @@ private enum class Destination(val label: String, val icon: ImageVector, val sel
 }
 
 @Composable
-fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, metadata: VideoMetadataSource, downloads: DownloadScheduler) {
+fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, metadata: VideoMetadataSource, downloads: DownloadScheduler, playerOpenRequest: Int = 0) {
     val vm: SpixViewModel = viewModel(factory = viewModelFactory {
         initializer { SpixViewModel(repository, createSavedStateHandle(), metadata, downloads) }
     })
@@ -70,6 +73,11 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
         }
         if (permissions.isEmpty()) vm.enqueue() else permissionLauncher.launch(permissions.toTypedArray())
     }
+    val playback: PlaybackViewModel = viewModel(factory = viewModelFactory {
+        initializer { PlaybackViewModel(context.applicationContext as Application) }
+    })
+    val access = remember(playback, nav) { PlayerAccess(playback) { nav.navigate("player") { launchSingleTop = true } } }
+    LaunchedEffect(playerOpenRequest) { if (playerOpenRequest > 0) access.open() }
     val snackbar = remember { SnackbarHostState() }
     var showConfirmation by rememberSaveable { mutableStateOf(false) }
 
@@ -91,9 +99,11 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
     }
     LaunchedEffect(settingsVm) { settingsVm.events.collect { snackbar.showSnackbar(it) } }
     fun open(route: String) { nav.navigate(route) { launchSingleTop = true } }
+    CompositionLocalProvider(LocalPlayerAccess provides access) {
     val isMainDestination = route == Destination.Home.name || route == Destination.Downloads.name || route == Destination.Library.name
     val travel = with(LocalDensity.current) { 20.dp.roundToPx() }
     Scaffold(
+        containerColor = if (route == "player") Color.Black else MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             if (isMainDestination) Box(Modifier.fillMaxWidth().statusBarsPadding(), contentAlignment = Alignment.TopCenter) {
@@ -104,7 +114,8 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
         },
         bottomBar = {
             // Change the viewport once per destination, never animate Scaffold's padding every frame.
-            if (isMainDestination) {
+            if (isMainDestination) Column {
+                MiniPlayer(access)
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                     Destination.entries.forEach { destination ->
                         val selected = route == destination.name
@@ -126,7 +137,7 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), contentAlignment = Alignment.TopCenter) {
             NavHost(
                 navController = nav, startDestination = Destination.Home.name,
-                modifier = Modifier.fillMaxHeight().widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 20.dp),
+                modifier = Modifier.fillMaxHeight().widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = if (route == "player") 0.dp else 20.dp),
                 enterTransition = {
                     if (!motion) EnterTransition.None
                     else if (routeOrder(initialState.destination.route) < 3 && routeOrder(targetState.destination.route) < 3)
@@ -165,6 +176,7 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
                     val tracks by vm.tracks.collectAsStateWithLifecycle()
                     SearchScreen(query, tracks, vm::updateQuery) { nav.popBackStack() }
                 }
+                composable("player") { PlayerScreen(playback) { nav.popBackStack() } }
                 composable("settings") {
                     val location by settingsVm.location.collectAsStateWithLifecycle()
                     val settingsBusy by settingsVm.busy.collectAsStateWithLifecycle()
@@ -178,6 +190,7 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
     if (showConfirmation) DownloadConfirmation(vm, settingsVm, { showConfirmation = false }) {
         showConfirmation = false
         startDownload()
+    }
     }
 }
 
@@ -207,5 +220,6 @@ private fun routeOrder(route: String?): Int = when (route) {
     Destination.Library.name -> 2
     "search" -> 3
     "settings" -> 4
+    "player" -> 5
     else -> 0
 }

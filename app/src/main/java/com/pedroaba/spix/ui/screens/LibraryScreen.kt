@@ -57,6 +57,6 @@ fun SearchScreen(query: String, tracks: List<Track>, onQuery: (String) -> Unit, 
         if (results.isEmpty()) item(key = "empty", contentType = "empty") { EmptyState(SpixIcons.Search,
             if (query.isBlank()) "Encontre suas músicas" else "Nenhuma música encontrada",
             if (query.isBlank()) "Busque pelo nome da música ou do artista na sua biblioteca." else "Não há resultados para “$query”. Tente outro nome.") }
-        else items(results, key = { "track:${it.id}" }, contentType = { "track" }) { ListItem(headlineContent = { Text(it.title) }, supportingContent = { Text(it.artist) }) }
+        else items(results, key = { "track:${it.id}" }, contentType = { "track" }) { ListItem(headlineContent = { Text(it.title) }, supportingContent = { Text(it.artist) }, trailingContent = { OpenVideoButton(it.localUri) }) }
     }
 }
