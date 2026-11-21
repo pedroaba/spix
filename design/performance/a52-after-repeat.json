@@ -1,0 +1,17 @@
+{
+  "model": "SM-A525M",
+  "sdk": "34",
+  "rounds": 5,
+  "transitions": 35,
+  "settle_seconds": 0.65,
+  "summary": {
+    "frames": 978,
+    "janky_frames": 61,
+    "janky_percent": 6.24,
+    "p50_ms": 8,
+    "p90_ms": 13,
+    "p95_ms": 19,
+    "p99_ms": 32
+  },
+  "method": "HWUI gfxinfo; two warmup rounds; fixed taps; no Spix data or preference changes; USB stay-awake restored on exit"
+}

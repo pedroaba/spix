@@ -9,20 +9,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.pedroaba.spix.download.DownloadScheduler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -55,19 +52,10 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
         initializer { SettingsViewModel(settingsRepository) }
     })
     val preferences by settingsVm.settings.collectAsStateWithLifecycle()
-    val location by settingsVm.location.collectAsStateWithLifecycle()
-    val settingsBusy by settingsVm.busy.collectAsStateWithLifecycle()
     val motion = preferences.navigationAnimations
     val nav = rememberNavController()
     val current by nav.currentBackStackEntryAsState()
     val route = current?.destination?.route ?: Destination.Home.name
-    val link by vm.link.collectAsStateWithLifecycle()
-    val query by vm.query.collectAsStateWithLifecycle()
-    val requests by vm.requests.collectAsStateWithLifecycle()
-    val tracks by vm.tracks.collectAsStateWithLifecycle()
-    val error by vm.error.collectAsStateWithLifecycle()
-    val busy by vm.busy.collectAsStateWithLifecycle()
-    val preview by vm.preview.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         if (Build.VERSION.SDK_INT >= 29 || granted[Manifest.permission.WRITE_EXTERNAL_STORAGE] == true) vm.enqueue()
@@ -82,12 +70,11 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
         }
         if (permissions.isEmpty()) vm.enqueue() else permissionLauncher.launch(permissions.toTypedArray())
     }
-    val readyVideo = (preview as? VideoPreviewState.Ready)?.video
     val snackbar = remember { SnackbarHostState() }
     var showConfirmation by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(link) { showConfirmation = false }
 
     fun navigate(destination: Destination) {
+        if (nav.currentDestination?.route == destination.name) return
         nav.navigate(destination.name) {
             popUpTo(nav.graph.startDestinationId) { saveState = true }
             launchSingleTop = true
@@ -104,14 +91,20 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
     }
     LaunchedEffect(settingsVm) { settingsVm.events.collect { snackbar.showSnackbar(it) } }
     fun open(route: String) { nav.navigate(route) { launchSingleTop = true } }
+    val isMainDestination = route == Destination.Home.name || route == Destination.Downloads.name || route == Destination.Library.name
+    val travel = with(LocalDensity.current) { 20.dp.roundToPx() }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            if (isMainDestination) Box(Modifier.fillMaxWidth().statusBarsPadding(), contentAlignment = Alignment.TopCenter) {
+                Box(Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 20.dp)) {
+                    BrandHeader({ open("search") }, { open("settings") })
+                }
+            }
+        },
         bottomBar = {
-            AnimatedVisibility(
-                visible = route != "search" && route != "settings",
-                enter = if (motion) fadeIn(tween(180)) + expandVertically(tween(220)) else EnterTransition.None,
-                exit = if (motion) fadeOut(tween(120)) + shrinkVertically(tween(180)) else ExitTransition.None,
-            ) {
+            // Change the viewport once per destination, never animate Scaffold's padding every frame.
+            if (isMainDestination) {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                     Destination.entries.forEach { destination ->
                         val selected = route == destination.name
@@ -135,35 +128,45 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
                 navController = nav, startDestination = Destination.Home.name,
                 modifier = Modifier.fillMaxHeight().widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 20.dp),
                 enterTransition = {
-                    if (!motion) EnterTransition.None else fadeIn(tween(180)) + slideInHorizontally(tween(240, easing = FastOutSlowInEasing)) {
-                        if (routeOrder(targetState.destination.route) >= routeOrder(initialState.destination.route)) it / 8 else -it / 8
-                    }
+                    if (!motion) EnterTransition.None
+                    else if (routeOrder(initialState.destination.route) < 3 && routeOrder(targetState.destination.route) < 3)
+                        fadeIn(tween(150, delayMillis = 70))
+                    else fadeIn(tween(150, delayMillis = 70)) + slideInHorizontally(tween(200, delayMillis = 70, easing = FastOutSlowInEasing)) { travel }
                 },
                 exitTransition = {
-                    if (!motion) ExitTransition.None else fadeOut(tween(140)) + slideOutHorizontally(tween(220, easing = FastOutSlowInEasing)) {
-                        if (routeOrder(targetState.destination.route) >= routeOrder(initialState.destination.route)) -it / 8 else it / 8
-                    }
+                    if (!motion) ExitTransition.None else fadeOut(tween(70))
                 },
                 popEnterTransition = {
-                    if (!motion) EnterTransition.None else fadeIn(tween(180)) + slideInHorizontally(tween(240, easing = FastOutSlowInEasing)) { -it / 8 }
+                    if (!motion) EnterTransition.None else fadeIn(tween(150, delayMillis = 70))
                 },
                 popExitTransition = {
-                    if (!motion) ExitTransition.None else fadeOut(tween(140)) + slideOutHorizontally(tween(220, easing = FastOutSlowInEasing)) { it / 8 }
+                    if (!motion) ExitTransition.None else fadeOut(tween(70))
                 },
             ) {
                 composable(Destination.Home.name) {
-                    TabScreen({ open("search") }, { open("settings") }) {
-                        HomeScreen(link, error, busy, preview, motion, tracks.size, vm::updateLink, vm::searchVideo) { showConfirmation = true }
-                    }
+                    val link by vm.link.collectAsStateWithLifecycle()
+                    val error by vm.error.collectAsStateWithLifecycle()
+                    val busy by vm.busy.collectAsStateWithLifecycle()
+                    val preview by vm.preview.collectAsStateWithLifecycle()
+                    val tracks by vm.tracks.collectAsStateWithLifecycle()
+                    HomeScreen(link, error, busy, preview, motion, tracks.size, vm::updateLink, vm::searchVideo) { showConfirmation = true }
                 }
                 composable(Destination.Downloads.name) {
-                    TabScreen({ open("search") }, { open("settings") }) { DownloadsScreen(requests, vm::remove, vm::retry, vm::cancel) }
+                    val requests by vm.requests.collectAsStateWithLifecycle()
+                    DownloadsScreen(requests, vm::remove, vm::retry, vm::cancel)
                 }
                 composable(Destination.Library.name) {
-                    TabScreen({ open("search") }, { open("settings") }) { LibraryScreen(tracks) }
+                    val tracks by vm.tracks.collectAsStateWithLifecycle()
+                    LibraryScreen(tracks)
                 }
-                composable("search") { SearchScreen(query, tracks, vm::updateQuery) { nav.popBackStack() } }
+                composable("search") {
+                    val query by vm.query.collectAsStateWithLifecycle()
+                    val tracks by vm.tracks.collectAsStateWithLifecycle()
+                    SearchScreen(query, tracks, vm::updateQuery) { nav.popBackStack() }
+                }
                 composable("settings") {
+                    val location by settingsVm.location.collectAsStateWithLifecycle()
+                    val settingsBusy by settingsVm.busy.collectAsStateWithLifecycle()
                     SettingsScreen(preferences, location, settingsBusy, { nav.popBackStack() },
                         settingsVm::setTheme, settingsVm::setAnimations, settingsVm::selectFolder,
                         settingsVm::useDefaultFolder, settingsVm::refreshLocation, settingsVm::pickerUnavailable)
@@ -171,15 +174,30 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
             }
         }
     }
-    if (showConfirmation && readyVideo != null) AlertDialog(onDismissRequest = { showConfirmation = false },
+    if (showConfirmation) DownloadConfirmation(vm, settingsVm, { showConfirmation = false }) {
+        showConfirmation = false
+        startDownload()
+    }
+}
+
+@Composable
+private fun DownloadConfirmation(vm: SpixViewModel, settingsVm: SettingsViewModel, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    val preview by vm.preview.collectAsStateWithLifecycle()
+    val busy by vm.busy.collectAsStateWithLifecycle()
+    val link by vm.link.collectAsStateWithLifecycle()
+    val location by settingsVm.location.collectAsStateWithLifecycle()
+    val originalLink = remember { link }
+    LaunchedEffect(link) { if (link != originalLink) onDismiss() }
+    val video = (preview as? VideoPreviewState.Ready)?.video ?: return
+    AlertDialog(onDismissRequest = onDismiss,
         title = { Text("Baixar este vídeo?") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(readyVideo.title, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-            Text(readyVideo.author, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(video.title, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+            Text(video.author, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("O vídeo será salvo em ${location.name}. Qualidade de até 720p, com áudio.")
         } },
-        confirmButton = { TextButton(onClick = { showConfirmation = false; startDownload() }, enabled = !busy) { Text("Baixar vídeo") } },
-        dismissButton = { TextButton(onClick = { showConfirmation = false }) { Text("Cancelar") } })
+        confirmButton = { TextButton(onClick = onConfirm, enabled = !busy) { Text("Baixar vídeo") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } })
 }
 
 private fun routeOrder(route: String?): Int = when (route) {
@@ -189,12 +207,4 @@ private fun routeOrder(route: String?): Int = when (route) {
     "search" -> 3
     "settings" -> 4
     else -> 0
-}
-
-@Composable
-private fun TabScreen(onSearch: () -> Unit, onSettings: () -> Unit, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxSize()) {
-        BrandHeader(onSearch, onSettings)
-        Box(Modifier.weight(1f)) { content() }
-    }
 }

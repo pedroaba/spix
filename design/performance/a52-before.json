@@ -1,0 +1,17 @@
+{
+  "model": "SM-A525M",
+  "sdk": "34",
+  "rounds": 5,
+  "transitions": 35,
+  "settle_seconds": 0.65,
+  "summary": {
+    "frames": 941,
+    "janky_frames": 80,
+    "janky_percent": 8.5,
+    "p50_ms": 10,
+    "p90_ms": 18,
+    "p95_ms": 23,
+    "p99_ms": 36
+  },
+  "method": "HWUI gfxinfo; two warmup rounds; fixed taps, no downloads or preference changes"
+}

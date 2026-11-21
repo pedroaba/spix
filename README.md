@@ -72,7 +72,7 @@ Abra o ícone de configurações no cabeçalho de qualquer aba.
 
 - **Tema**: Sistema, Claro ou Escuro, aplicado imediatamente e persistido. As barras do Android também acompanham o tema escolhido.
 - **Onde salvar os vídeos**: pasta pública Downloads/Spix por padrão, ou pasta escolhida com o seletor nativo do Android. O acesso concedido é persistido e verificado ao voltar à tela. Cancelar a escolha mantém o local anterior. É possível retornar à pasta padrão. A mudança vale para novos arquivos; não move ou apaga os existentes.
-- **Animações de navegação**: transições com fade e deslocamento curto entre abas e telas de detalhe, com entrada/saída animada da barra inferior. A preferência pode ser desligada. As animações do Compose também seguem a escala de animação do sistema.
+- **Animações de navegação**: transições com fade e deslocamento curto entre abas e telas de detalhe. Cabeçalho e barra inferior permanecem estáveis entre abas; a mudança para detalhes ajusta o espaço uma única vez. A preferência pode ser desligada. As animações do Compose também seguem a escala de animação do sistema.
 - **Sobre**: versão e estágio atual do aplicativo.
 
 `SettingsRepository` centraliza as preferências. `VideoStorage` grava na pasta pública usando MediaStore no Android 10+, sem permissão ampla, ou na pasta escolhida via SAF. No Android 8/9, solicita permissão de escrita para o destino público.
@@ -134,3 +134,31 @@ A licença GPL-3.0 da biblioteca está incluída em `assets/licenses/`. Fontes e
 Nota de ferramentas: o detector `WebViewApiAvailability` do lint do AGP 9.2.1 apresentou uma falha interna ao inspecionar símbolos Kotlin das novas dependências. Esse detector está desativado; o app não usa WebViews. As demais checagens continuam ativas.
 
 Validação dos downloads: build debug, dez testes JVM e lint passaram. No emulador API 37, passaram os testes de persistência da biblioteca, gravação/leitura em Downloads/Spix sem sobrescrita e exclusão de arquivo parcial após erro. O teste de pasta SAF foi ignorado por não haver pasta personalizada selecionada nesta rodada. Um vídeo público real foi baixado e permaneceu concluído na biblioteca após encerrar e abrir o app. O MP4 foi conferido com ffprobe: 19,06 s, trilhas de vídeo e áudio, 533.915 bytes. Capturas: `design/android-download-concluido.png` e `design/android-biblioteca-video.png`.
+
+## Navegação e desempenho no aparelho físico
+
+Para avaliar a fluidez, gere e instale a variante otimizada local (R8, recursos reduzidos e sem depuração):
+
+```sh
+./gradlew :app:assemblePerformance
+adb -s SERIAL install --no-streaming -r app/build/outputs/apk/performance/app-performance.apk
+```
+
+`performance` usa a assinatura de desenvolvimento já instalada para preservar os dados durante os testes locais. `release` continua com a configuração de distribuição separada. O modo `debug` mantém as ferramentas do Compose e serve para depuração.
+
+As abas usam fade-through: a tela anterior desaparece antes de a próxima entrar. As telas de detalhe usam um deslocamento curto na entrada. O cabeçalho compartilhado fica fora do NavHost e a barra inferior não anima a própria altura, evitando recalcular o espaço do Scaffold a cada quadro. A saída tem fade curto e a entrada é adiada para evitar sobreposição de telas opacas. Tocar novamente na aba ativa não recria a navegação.
+
+Cada destino observa seus próprios fluxos de estado, para que digitação e progresso dos downloads não invalidem a estrutura global. Biblioteca e busca usam LazyColumn, chaves estáveis e filtros memorizados. O shimmer lê a animação no desenho e reutiliza o gradiente; pausa enquanto a tela não está RESUMED. A preferência de animações desativadas continua sendo respeitada.
+
+Coleta reproduzível no aparelho (deixe o Spix aberto e não interaja durante a execução):
+
+```sh
+adb -s SERIAL shell cmd package compile -m speed -f com.pedroaba.spix
+python3 scripts/measure_navigation.py --serial SERIAL --output design/performance/coleta.json
+```
+
+O script faz duas voltas de aquecimento, zera os contadores HWUI e percorre 35 transições entre abas, configurações e busca. Não baixa arquivos nem altera preferências do Spix. Mantém a tela acesa por USB durante a coleta e restaura a configuração anterior do Android ao terminar. A coleta é um diagnóstico de quadros no aparelho, sem afirmar certificação de fluidez ou substituir um Macrobenchmark. Os dados brutos e os resumos ficam em `design/performance/`. A frequência de atualização, temperatura e processos do Android podem variar entre execuções.
+
+Referência: [desempenho no Jetpack Compose](https://developer.android.com/develop/ui/compose/performance).
+
+Validação em 04/11/2026 no Galaxy A52 (Android 14): duas coletas da navegação anterior registraram 7,56–8,50% de quadros atrasados; com o fade-through, as duas coletas ficaram em 6,24–6,60%. O percentil 90 passou de 15–18 ms para 13 ms. Ambas as versões foram otimizadas e compiladas com ART `speed`; os números são diagnósticos desse fluxo e aparelho. Build debug/otimizado, dez testes JVM e lint passaram. As preferências e os arquivos existentes do celular foram preservados.

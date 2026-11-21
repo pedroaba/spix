@@ -6,12 +6,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.runtime.State
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.semantics.*
@@ -87,24 +92,23 @@ private fun VideoPreviewContent(state: VideoPreviewState, motion: Boolean, onRet
 
 @Composable
 private fun VideoPreviewSkeleton(motion: Boolean) {
-    val progress = if (motion) {
+    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val animate = motion && lifecycle.isAtLeast(Lifecycle.State.RESUMED)
+    val progress: State<Float>? = if (animate) {
         val transition = rememberInfiniteTransition(label = "videoSkeleton")
-        val value by transition.animateFloat(
+        transition.animateFloat(
             initialValue = -1f, targetValue = 2f,
             animationSpec = infiniteRepeatable(tween(1300, easing = LinearEasing), RepeatMode.Restart),
             label = "shimmer",
         )
-        value
-    } else 0f
+    } else null
     val base = MaterialTheme.colorScheme.surfaceContainerHighest
     val highlight = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
-    fun Modifier.placeholder() = clip(RoundedCornerShape(6.dp)).background(base).drawBehind {
-        if (motion) {
-            val x = size.width * progress
-            drawRect(Brush.linearGradient(
-                colors = listOf(base, highlight, base),
-                start = Offset(x - size.width, 0f), end = Offset(x + size.width, size.height),
-            ))
+    fun Modifier.placeholder() = clip(RoundedCornerShape(6.dp)).background(base).drawWithCache {
+        val brush = Brush.linearGradient(listOf(base, highlight, base), Offset.Zero, Offset(size.width, size.height))
+        onDrawBehind {
+            // Read animation state during drawing; no recomposition or shader allocation per frame.
+            progress?.let { state -> translate(left = size.width * state.value) { drawRect(brush) } }
         }
     }
     Surface(

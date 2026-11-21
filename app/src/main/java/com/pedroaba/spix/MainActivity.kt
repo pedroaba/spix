@@ -6,7 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pedroaba.spix.ui.SpixApp
@@ -22,9 +22,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             val settings by app.settingsRepository.settings.collectAsStateWithLifecycle()
             val dark = settings.theme.isDark(isSystemInDarkTheme())
-            SideEffect {
+            DisposableEffect(dark) {
                 val style = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { dark }
                 enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+                onDispose { }
             }
             SpixTheme(darkTheme = dark) { SpixApp(app.repository, app.settingsRepository, app.metadataRepository, app.downloadScheduler) }
         }
