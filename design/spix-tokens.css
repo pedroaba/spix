@@ -1,0 +1,26 @@
+/* Spix · Semânticos · Claro */
+:root {
+  --surface-canvas: #FFFFFF;
+  --surface-subtle: #F2F2F2;
+  --text-primary: #0F0F0F;
+  --text-secondary: #606060;
+  --border-default: #D3D3D3;
+  --border-subtle: #EEEEEE;
+  --brand-red: #C30027;
+  --feedback-error: #A61C32;
+  --radius-control: 24px;
+  --radius-card: 12px;
+  --space-page: 20px;
+  --control-height: 48px;
+  --type-body: 14px;
+  --type-title: 28px;
+  --motion-standard: 180px;
+  --action-primary: #C30027;
+  --action-focus: #065FD4;
+  --action-hover: #A80021;
+  --selection-subtle: #FCE8EC;
+  --text-disabled: #909090;
+  --text-tertiary: #717171;
+  --action-pressed: #0556BF;
+  --link-inverse: #3EA6FF;
+}

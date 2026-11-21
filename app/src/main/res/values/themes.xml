@@ -1,0 +1,15 @@
+<resources>
+    <style name="Theme.Spix" parent="Theme.Spix.Light" />
+    <style name="Theme.Spix.Light" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="android:colorAccent">#C30027</item>
+    </style>
+    <style name="Theme.Spix.Dark" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">#0F0F0F</item>
+        <item name="android:colorAccent">#FF8095</item>
+    </style>
+</resources>
