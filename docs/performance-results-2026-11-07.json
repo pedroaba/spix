@@ -1,0 +1,111 @@
+{
+  "device": "Samsung Galaxy A52 SM-A525M, Android 14, 90 Hz",
+  "method": "Three Macrobenchmark iterations, R8, ART Full, distinct local 480x360 thumbnails; PSS sampled after scrolling in each iteration.",
+  "caveat": "Baseline and after-reboot runs have different system conditions and are not an isolated causal comparison. Frame smoothness target below 5% was not achieved. USB connection was lost during an additional idle run.",
+  "results": [
+    {
+      "run": "baseline",
+      "scenario": "home-100",
+      "missedFramesPercent": [
+        30.92,
+        36.25,
+        28.68
+      ],
+      "cpuFrameP95Ms": 14.216,
+      "medianPssMiB": 97.58
+    },
+    {
+      "run": "baseline",
+      "scenario": "home-1000",
+      "missedFramesPercent": [
+        32.84,
+        28.85,
+        32.75
+      ],
+      "cpuFrameP95Ms": 14.723,
+      "medianPssMiB": 108.97
+    },
+    {
+      "run": "after",
+      "scenario": "home-100",
+      "missedFramesPercent": [
+        37.69,
+        34.47,
+        34.88
+      ],
+      "cpuFrameP95Ms": 16.047,
+      "medianPssMiB": 101.62
+    },
+    {
+      "run": "after-reboot",
+      "scenario": "downloads-1000",
+      "missedFramesPercent": [
+        62.07,
+        79.72,
+        68.64
+      ],
+      "cpuFrameP95Ms": 21.705,
+      "medianPssMiB": 95.97
+    },
+    {
+      "run": "after-reboot",
+      "scenario": "home-1000",
+      "missedFramesPercent": [
+        58.8,
+        68.05,
+        67.59
+      ],
+      "cpuFrameP95Ms": 20.963,
+      "medianPssMiB": 101.7
+    },
+    {
+      "run": "after-reboot",
+      "scenario": "home-19",
+      "missedFramesPercent": [
+        57.27,
+        59.2,
+        92.51
+      ],
+      "cpuFrameP95Ms": 21.598,
+      "medianPssMiB": 92.59
+    },
+    {
+      "run": "after-reboot",
+      "scenario": "home-400",
+      "missedFramesPercent": [
+        61.42,
+        70.2,
+        64.73
+      ],
+      "cpuFrameP95Ms": 20.783,
+      "medianPssMiB": 101.4
+    },
+    {
+      "run": "after-reboot",
+      "scenario": "library-1000",
+      "missedFramesPercent": [
+        53.33,
+        70.48,
+        74.89
+      ],
+      "cpuFrameP95Ms": 20.533,
+      "medianPssMiB": 105.24
+    }
+  ],
+  "sixtyHzSmoke": {
+    "requestedByUser": true,
+    "optimizedApkInstalled": true,
+    "displayModeId": 2,
+    "resolution": "1080x2400",
+    "refreshRateHz": 60.000004,
+    "matchContentFrameRatePreference": {
+      "before": 0,
+      "after": 1,
+      "authorizedByUser": true
+    },
+    "frames": 61,
+    "jankyFrames": 2,
+    "jankyFramesPercent": 3.28,
+    "scope": "Two short scroll gestures on the existing 19-item personal library, without Perfetto or repeated load tests. Not a certification of the three-run 1000-item target."
+  }
+}

@@ -62,6 +62,29 @@ class VideoStorage(private val context: Context, private val settings: SettingsR
         }
     }
 
+    /** Delete disk content first; callers only remove catalog rows after this succeeds. */
+    suspend fun deleteSavedVideo(value: String) = withContext(Dispatchers.IO) {
+        val uri = Uri.parse(value)
+        try {
+            if (!deleteVideo(uri) && exists(uri)) throw IOException("Não foi possível excluir o arquivo.")
+        } catch (missing: java.io.FileNotFoundException) {
+            // A file already removed outside Spix may also be removed from the catalog.
+        } catch (denied: SecurityException) {
+            val sender = when {
+                Build.VERSION.SDK_INT >= 30 && uri.authority == MediaStore.AUTHORITY ->
+                    MediaStore.createDeleteRequest(context.contentResolver, listOf(uri)).intentSender
+                Build.VERSION.SDK_INT == 29 && denied is android.app.RecoverableSecurityException -> denied.userAction.actionIntent.intentSender
+                else -> throw denied
+            }
+            throw FileDeletionConsent(sender)
+        }
+    }
+
+    private fun exists(uri: Uri): Boolean = when {
+        uri.scheme == "file" -> File(requireNotNull(uri.path)).exists()
+        else -> context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { it.moveToFirst() } ?: true
+    }
+
     suspend fun deleteVideo(uri: Uri): Boolean = withContext(Dispatchers.IO) {
         when {
             uri.scheme == "file" -> File(requireNotNull(uri.path)).delete()
@@ -70,3 +93,5 @@ class VideoStorage(private val context: Context, private val settings: SettingsR
         }
     }
 }
+
+class FileDeletionConsent(val sender: android.content.IntentSender) : Exception("Confirme a exclusão no Android.")

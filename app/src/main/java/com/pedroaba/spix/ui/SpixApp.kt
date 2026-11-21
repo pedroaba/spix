@@ -1,9 +1,7 @@
 package com.pedroaba.spix.ui
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.ui.graphics.Color
 import com.pedroaba.spix.playback.*
-import android.app.Application
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -33,6 +31,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation.compose.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import com.pedroaba.spix.data.SpixRepository
 import com.pedroaba.spix.data.SettingsRepository
 import com.pedroaba.spix.data.VideoMetadataSource
@@ -43,23 +43,43 @@ import com.pedroaba.spix.ui.screens.*
 private enum class Destination(val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
     Home("Início", SpixIcons.Home, SpixIcons.HomeFilled),
     Downloads("Downloads", SpixIcons.Download, SpixIcons.DownloadFilled),
-    Library("Biblioteca", SpixIcons.Library, SpixIcons.LibraryFilled)
+    Library("Biblioteca", SpixIcons.Library, SpixIcons.LibraryFilled),
+    Playlists("Playlists", SpixIcons.VideoLibrary, SpixIcons.VideoLibraryFilled)
 }
 
 @Composable
-fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, metadata: VideoMetadataSource, downloads: DownloadScheduler, playerOpenRequest: Int = 0) {
+fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, metadata: VideoMetadataSource, downloads: DownloadScheduler, playlists: com.pedroaba.spix.data.PlaylistMetadataSource, playback: PlaybackViewModel, playerOpenRequest: Int = 0, pictureInPicture: Boolean = false) {
+    val storage by repository.storageState.collectAsStateWithLifecycle()
+    val recoveryScope = rememberCoroutineScope()
+    if (storage !is com.pedroaba.spix.data.StorageState.Ready) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            when (val state = storage) {
+                is com.pedroaba.spix.data.StorageState.Failed -> Column(Modifier.padding(24.dp)) {
+                    Text(state.message)
+                    TextButton(onClick = { recoveryScope.launch { runCatching { repository.retryInitialization() } } }) { Text("Tentar novamente") }
+                }
+                else -> CircularProgressIndicator()
+            }
+        }
+        return
+    }
+    val context = LocalContext.current
+    val application = context.applicationContext as com.pedroaba.spix.SpixApplication
+    val localPlaylists = application.localPlaylists
     val vm: SpixViewModel = viewModel(factory = viewModelFactory {
-        initializer { SpixViewModel(repository, createSavedStateHandle(), metadata, downloads) }
+        initializer { SpixViewModel(repository, createSavedStateHandle(), metadata, downloads, playlists, localPlaylists::importPlaylist, application.videoStorage::deleteSavedVideo) }
     })
     val settingsVm: SettingsViewModel = viewModel(factory = viewModelFactory {
         initializer { SettingsViewModel(settingsRepository) }
     })
     val preferences by settingsVm.settings.collectAsStateWithLifecycle()
-    val motion = preferences.navigationAnimations
+    val motion = preferences.navigationAnimations && !pictureInPicture
     val nav = rememberNavController()
     val current by nav.currentBackStackEntryAsState()
     val route = current?.destination?.route ?: Destination.Home.name
-    val context = LocalContext.current
+    val deletionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
+        vm.deletionConsentResult(it.resultCode == android.app.Activity.RESULT_OK)
+    }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         if (Build.VERSION.SDK_INT >= 29 || granted[Manifest.permission.WRITE_EXTERNAL_STORAGE] == true) vm.enqueue()
         else vm.storagePermissionDenied()
@@ -73,15 +93,21 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
         }
         if (permissions.isEmpty()) vm.enqueue() else permissionLauncher.launch(permissions.toTypedArray())
     }
-    val playback: PlaybackViewModel = viewModel(factory = viewModelFactory {
-        initializer { PlaybackViewModel(context.applicationContext as Application) }
-    })
     val access = remember(playback, nav) { PlayerAccess(playback) { nav.navigate("player") { launchSingleTop = true } } }
-    LaunchedEffect(playerOpenRequest) { if (playerOpenRequest > 0) access.open() }
+    suspend fun openPlayerWhenReady() {
+        val destination = nav.currentDestination ?: nav.currentBackStackEntryFlow.first().destination
+        if (destination.route != "player") access.open()
+    }
+    LaunchedEffect(playerOpenRequest) { if (playerOpenRequest > 0) openPlayerWhenReady() }
+    LaunchedEffect(pictureInPicture) { if (pictureInPicture) openPlayerWhenReady() }
     val snackbar = remember { SnackbarHostState() }
-    var showConfirmation by rememberSaveable { mutableStateOf(false) }
+    var downloadQueueRequest by rememberSaveable { mutableIntStateOf(0) }
 
     fun navigate(destination: Destination) {
+        // Detail routes must not become the saved stack restored by a main tab.
+        while (nav.currentDestination?.route !in Destination.entries.map { it.name }) {
+            if (!nav.popBackStack()) break
+        }
         if (nav.currentDestination?.route == destination.name) return
         nav.navigate(destination.name) {
             popUpTo(nav.graph.startDestinationId) { saveState = true }
@@ -92,21 +118,31 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
     LaunchedEffect(vm) {
         vm.events.collect { event ->
             when (event) {
-                SpixEvent.LinkQueued -> { navigate(Destination.Downloads); snackbar.showSnackbar("Download adicionado à fila.") }
+                is SpixEvent.LinkQueued -> { downloadQueueRequest++; navigate(Destination.Downloads); snackbar.showSnackbar(event.message) }
                 is SpixEvent.Message -> snackbar.showSnackbar(event.text)
+                is SpixEvent.Removed -> playback.removeDeleted(event.videoId)
+                is SpixEvent.DeleteConsent -> {
+                    try { deletionLauncher.launch(androidx.activity.result.IntentSenderRequest.Builder(event.sender).build()) }
+                    catch (_: Exception) { vm.deletionConsentResult(false) }
+                }
             }
         }
     }
     LaunchedEffect(settingsVm) { settingsVm.events.collect { snackbar.showSnackbar(it) } }
     fun open(route: String) { nav.navigate(route) { launchSingleTop = true } }
-    CompositionLocalProvider(LocalPlayerAccess provides access) {
-    val isMainDestination = route == Destination.Home.name || route == Destination.Downloads.name || route == Destination.Library.name
+    var saveTrack by remember { mutableStateOf<com.pedroaba.spix.domain.Track?>(null) }
+    var deleteTrack by remember { mutableStateOf<com.pedroaba.spix.domain.Track?>(null) }
+    val deleteAction: (com.pedroaba.spix.domain.Track) -> Unit = { deleteTrack = it }
+    val saveAction: (com.pedroaba.spix.domain.Track) -> Unit = { saveTrack = it }
+    CompositionLocalProvider(LocalPlayerAccess provides access, LocalSaveToPlaylist provides saveAction, LocalDeleteTrack provides deleteAction) {
+    val isMainDestination = route in Destination.entries.map { it.name }
     val travel = with(LocalDensity.current) { 20.dp.roundToPx() }
     Scaffold(
-        containerColor = if (route == "player") Color.Black else MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbar) },
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = if (pictureInPicture) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
+        snackbarHost = { if (!pictureInPicture) SnackbarHost(snackbar) },
         topBar = {
-            if (isMainDestination) Box(Modifier.fillMaxWidth().statusBarsPadding(), contentAlignment = Alignment.TopCenter) {
+            if (isMainDestination && !pictureInPicture) Box(Modifier.fillMaxWidth().statusBarsPadding(), contentAlignment = Alignment.TopCenter) {
                 Box(Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 20.dp)) {
                     BrandHeader({ open("search") }, { open("settings") })
                 }
@@ -114,8 +150,7 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
         },
         bottomBar = {
             // Change the viewport once per destination, never animate Scaffold's padding every frame.
-            if (isMainDestination) Column {
-                MiniPlayer(access)
+            if (isMainDestination && !pictureInPicture) {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                     Destination.entries.forEach { destination ->
                         val selected = route == destination.name
@@ -134,13 +169,13 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), contentAlignment = Alignment.TopCenter) {
+        Box(if (pictureInPicture) Modifier.fillMaxSize() else Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), contentAlignment = Alignment.TopCenter) {
             NavHost(
                 navController = nav, startDestination = Destination.Home.name,
-                modifier = Modifier.fillMaxHeight().widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = if (route == "player") 0.dp else 20.dp),
+                modifier = if (pictureInPicture) Modifier.fillMaxSize() else Modifier.fillMaxHeight().widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = if (route == "player") 0.dp else 20.dp),
                 enterTransition = {
                     if (!motion) EnterTransition.None
-                    else if (routeOrder(initialState.destination.route) < 3 && routeOrder(targetState.destination.route) < 3)
+                    else if (initialState.destination.route in Destination.entries.map { it.name } && targetState.destination.route in Destination.entries.map { it.name })
                         fadeIn(tween(150, delayMillis = 70))
                     else fadeIn(tween(150, delayMillis = 70)) + slideInHorizontally(tween(200, delayMillis = 70, easing = FastOutSlowInEasing)) { travel }
                 },
@@ -159,67 +194,84 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
                     val error by vm.error.collectAsStateWithLifecycle()
                     val busy by vm.busy.collectAsStateWithLifecycle()
                     val preview by vm.preview.collectAsStateWithLifecycle()
-                    val tracks by vm.tracks.collectAsStateWithLifecycle()
-                    val requests by vm.requests.collectAsStateWithLifecycle()
-                    HomeScreen(link, error, busy, preview, motion, tracks, requests, vm::updateLink, vm::searchVideo) { showConfirmation = true }
+                    HomeScreen(link, error, busy, preview, repository, preferences.homeCards, settingsVm::setHomeCards, vm::updateLink,
+                        onSubmit = { if (vm.validateLink()) { if (preview is VideoPreviewState.Idle || preview is VideoPreviewState.Failed) vm.searchVideo(); open("add") } },
+                        onDownloads = { downloadQueueRequest++; navigate(Destination.Downloads) }, onCancel = vm::cancel)
                 }
                 composable(Destination.Downloads.name) {
-                    val requests by vm.requests.collectAsStateWithLifecycle()
-                    DownloadsScreen(requests, vm::remove, vm::retry, vm::cancel)
+                    val retryBusy by vm.retryBusy.collectAsStateWithLifecycle()
+                    DownloadsScreen(repository, vm::remove, vm::retry, vm::cancel, vm::cancelAllDownloads, retryBusy, vm::retryDownloads, downloadQueueRequest) { navigate(Destination.Library) }
                 }
                 composable(Destination.Library.name) {
-                    val tracks by vm.tracks.collectAsStateWithLifecycle()
-                    LibraryScreen(tracks)
+                    val removalBusy by vm.removalBusy.collectAsStateWithLifecycle()
+                    LibraryScreen(repository, localPlaylists, removalBusy, vm::removeMany) { message ->
+                        recoveryScope.launch { snackbar.showSnackbar(message) }
+                    }
+                }
+                composable(Destination.Playlists.name) {
+                    PlaylistsScreen(localPlaylists, { open("playlist-create") }, { open("playlist/$it") }, { open("playlist-edit/$it") })
+                }
+                composable("playlist/{id}") { entry ->
+                    val id = entry.arguments?.getString("id") ?: return@composable
+                    PlaylistDetail(id, localPlaylists, repository, { open("playlist-edit/$id") }, { nav.popBackStack() },
+                        playlistSync = application.playlistSync)
+                }
+                composable("playlist-create?video={video}", arguments = listOf(
+                    androidx.navigation.navArgument("video") { type = androidx.navigation.NavType.StringType; nullable = true; defaultValue = null }
+                )) { entry ->
+                    PlaylistEditorScreen(null, entry.arguments?.getString("video"), repository, localPlaylists,
+                        { nav.popBackStack() }, { nav.popBackStack(); recoveryScope.launch { snackbar.showSnackbar("Playlist criada.") } })
+                }
+                composable("playlist-edit/{id}") { entry ->
+                    PlaylistEditorScreen(entry.arguments?.getString("id"), null, repository, localPlaylists,
+                        { nav.popBackStack() }, { nav.popBackStack() })
                 }
                 composable("search") {
                     val query by vm.query.collectAsStateWithLifecycle()
-                    val tracks by vm.tracks.collectAsStateWithLifecycle()
-                    SearchScreen(query, tracks, vm::updateQuery) { nav.popBackStack() }
+                    SearchScreen(query, repository, vm::updateQuery, { nav.popBackStack() }, { navigate(Destination.Home) })
                 }
-                composable("player") { PlayerScreen(playback) { nav.popBackStack() } }
+                composable("add") {
+                    val link by vm.link.collectAsStateWithLifecycle()
+                    val error by vm.error.collectAsStateWithLifecycle()
+                    val busy by vm.busy.collectAsStateWithLifecycle()
+                    val preview by vm.preview.collectAsStateWithLifecycle()
+                    val location by settingsVm.location.collectAsStateWithLifecycle()
+                    val playlistName by vm.playlistName.collectAsStateWithLifecycle()
+                    AddContentScreen(link, error, busy, preview, motion, location.name, playlistName, vm::updatePlaylistName, vm::updateLink, vm::searchVideo,
+                        { nav.popBackStack() }, ::startDownload)
+                }
+                composable("player") { PlayerScreen(playback, pictureInPicture) { nav.popBackStack() } }
                 composable("settings") {
                     val location by settingsVm.location.collectAsStateWithLifecycle()
                     val settingsBusy by settingsVm.busy.collectAsStateWithLifecycle()
                     SettingsScreen(preferences, location, settingsBusy, { nav.popBackStack() },
                         settingsVm::setTheme, settingsVm::setAnimations, settingsVm::selectFolder,
-                        settingsVm::useDefaultFolder, settingsVm::refreshLocation, settingsVm::pickerUnavailable)
+                        settingsVm::useDefaultFolder, settingsVm::refreshLocation, settingsVm::pickerUnavailable,
+                        storageRepository = repository, onManageDownloads = { navigate(Destination.Library) })
+                }
+            }
+            if (route != "player" && !pictureInPicture) {
+                Box(
+                    Modifier.align(Alignment.BottomCenter).widthIn(max = 640.dp).fillMaxWidth()
+                        .padding(end = 12.dp, bottom = 12.dp),
+                    contentAlignment = Alignment.BottomEnd,
+                ) {
+                    MiniPlayer(access)
                 }
             }
         }
     }
-    if (showConfirmation) DownloadConfirmation(vm, settingsVm, { showConfirmation = false }) {
-        showConfirmation = false
-        startDownload()
+    if (!pictureInPicture) deleteTrack?.let { track ->
+        AlertDialog(onDismissRequest = { deleteTrack = null }, title = { Text("Excluir do celular?") },
+            text = { Text("“${track.title}” será removido da biblioteca, das playlists e do armazenamento do celular.") },
+            confirmButton = { TextButton(onClick = { deleteTrack = null; vm.remove(track.id) }) { Text("Excluir", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { deleteTrack = null }) { Text("Cancelar") } })
+    }
+    if (!pictureInPicture) saveTrack?.let { track ->
+        SaveToPlaylistSheet(track, localPlaylists, { saveTrack = null }, {
+            saveTrack = null
+            open("playlist-create?video=${android.net.Uri.encode(track.id)}")
+        })
     }
     }
-}
-
-@Composable
-private fun DownloadConfirmation(vm: SpixViewModel, settingsVm: SettingsViewModel, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    val preview by vm.preview.collectAsStateWithLifecycle()
-    val busy by vm.busy.collectAsStateWithLifecycle()
-    val link by vm.link.collectAsStateWithLifecycle()
-    val location by settingsVm.location.collectAsStateWithLifecycle()
-    val originalLink = remember { link }
-    LaunchedEffect(link) { if (link != originalLink) onDismiss() }
-    val video = (preview as? VideoPreviewState.Ready)?.video ?: return
-    AlertDialog(onDismissRequest = onDismiss,
-        title = { Text("Baixar este vídeo?") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(video.title, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-            Text(video.author, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("O vídeo será salvo em ${location.name}. Qualidade de até 720p, com áudio.")
-        } },
-        confirmButton = { TextButton(onClick = onConfirm, enabled = !busy) { Text("Baixar vídeo") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } })
-}
-
-private fun routeOrder(route: String?): Int = when (route) {
-    Destination.Home.name -> 0
-    Destination.Downloads.name -> 1
-    Destination.Library.name -> 2
-    "search" -> 3
-    "settings" -> 4
-    "player" -> 5
-    else -> 0
 }

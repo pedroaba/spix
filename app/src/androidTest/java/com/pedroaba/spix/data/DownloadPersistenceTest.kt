@@ -18,19 +18,23 @@ class DownloadPersistenceTest {
         val prefs = context.getSharedPreferences("spix", Context.MODE_PRIVATE)
         prefs.edit().putString("requests", """[{"id":"jNQXAC9IVRw","url":"https://youtu.be/jNQXAC9IVRw","at":1}]""").commit()
         try {
-            val repo = LocalSpixRepository(context)
-            assertEquals(DownloadStatus.Queued, repo.requests.value.single().status)
-            assertTrue(repo.tracks.value.isEmpty())
+            val db = androidx.room.Room.inMemoryDatabaseBuilder(base, SpixDatabase::class.java).build()
+            val repo = LocalSpixRepository(context, database = db)
+            repo.awaitReady()
+            assertEquals(DownloadStatus.Queued, repo.get("jNQXAC9IVRw")?.status)
+            assertTrue(repo.playbackQueue().isEmpty())
             val video = VideoMetadata("jNQXAC9IVRw", "https://youtu.be/jNQXAC9IVRw", "Teste", "Canal", null)
             assertFalse(repo.enqueue(video))
             repo.updateDownload(video.videoId) { it.copy(status = DownloadStatus.Completed, progress = 100, localUri = "content://media/external/downloads/123", duration = "0:19") }
-            val restored = LocalSpixRepository(context)
-            assertEquals(DownloadStatus.Completed, restored.requests.value.single().status)
-            assertEquals("0:19", restored.tracks.value.single().duration)
-            assertEquals(MediaKind.Video, restored.tracks.value.single().kind)
-            assertEquals("Teste", restored.tracks.value.single().title)
+            val restored = LocalSpixRepository(context, database = db)
+            restored.awaitReady()
+            assertEquals(DownloadStatus.Completed, restored.get("jNQXAC9IVRw")?.status)
+            assertEquals("0:19", restored.playbackQueue().single().duration)
+            assertEquals(MediaKind.Video, com.pedroaba.spix.domain.MediaKind.Video)
+            assertEquals("Teste", restored.playbackQueue().single().metadata?.title)
             restored.removeRequest(video.videoId)
-            assertTrue(LocalSpixRepository(context).requests.value.isEmpty())
+            assertNull(restored.get(video.videoId))
+            repo.close(); restored.close(); db.close()
         } finally { prefs.edit().clear().commit() }
     }
 }

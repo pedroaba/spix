@@ -23,6 +23,7 @@ class SettingsRepository(private val context: Context) {
     private val mutableSettings = MutableStateFlow(AppSettings(
         theme = ThemeMode.entries.firstOrNull { it.name == preferences.getString("theme", null) } ?: ThemeMode.System,
         navigationAnimations = preferences.getBoolean("navigation_animations", true),
+        homeCards = preferences.getBoolean("home_cards", false),
         videoFolderUri = preferences.getString("video_folder", null),
     ))
     val settings = mutableSettings.asStateFlow()
@@ -31,6 +32,7 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setTheme(theme: ThemeMode) = update { it.copy(theme = theme) }
     suspend fun setAnimations(enabled: Boolean) = update { it.copy(navigationAnimations = enabled) }
+    suspend fun setHomeCards(enabled: Boolean) = update { it.copy(homeCards = enabled) }
 
     suspend fun selectFolder(uri: Uri) = withContext(Dispatchers.IO) {
         mutex.withLock {
@@ -94,6 +96,7 @@ class SettingsRepository(private val context: Context) {
     private fun persist(value: AppSettings) {
         check(preferences.edit().putString("theme", value.theme.name)
             .putBoolean("navigation_animations", value.navigationAnimations)
+            .putBoolean("home_cards", value.homeCards)
             .putString("video_folder", value.videoFolderUri).commit()) { "Não foi possível salvar as configurações." }
         mutableSettings.value = value
     }

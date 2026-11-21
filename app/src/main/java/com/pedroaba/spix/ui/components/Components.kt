@@ -1,5 +1,6 @@
 package com.pedroaba.spix.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -12,26 +13,25 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.pedroaba.spix.ui.theme.SpixColors
+import com.pedroaba.spix.R
 
 @Composable
 fun BrandHeader(onSearch: () -> Unit, onSettings: () -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(34.dp, 26.dp).background(SpixColors.Red, RoundedCornerShape(7.dp)), contentAlignment = Alignment.Center) {
-            androidx.compose.foundation.Canvas(Modifier.size(15.dp)) {
-                drawPath(androidx.compose.ui.graphics.Path().apply {
-                    moveTo(size.width * .2f, 0f); lineTo(size.width, size.height / 2)
-                    lineTo(size.width * .2f, size.height); close()
-                }, Color.White)
-            }
+        Box(
+            Modifier.size(32.dp).background(colorResource(R.color.spix_icon_background), RoundedCornerShape(9.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(painterResource(R.drawable.ic_spix_mark), contentDescription = null, modifier = Modifier.size(24.dp))
         }
-        Text("Spix", Modifier.padding(start = 8.dp).weight(1f), fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text("Spix", Modifier.padding(start = 8.dp).weight(1f), fontSize = 28.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold)
         IconButton(onClick = onSearch) { Icon(SpixIcons.Search, "Buscar músicas") }
         IconButton(onClick = onSettings) { Icon(SpixIcons.Settings, "Abrir configurações") }
     }
@@ -53,16 +53,5 @@ fun EmptyState(icon: ImageVector, title: String, description: String, modifier: 
             fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
         Text(description, Modifier.padding(top = 12.dp).widthIn(max = 320.dp), fontSize = 14.sp,
             lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-    }
-}
-
-@Composable
-fun LibraryFilters(onSelected: (String) -> Unit = {}) {
-    var selected by rememberSaveable { mutableStateOf("Todas") }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("Todas", "Músicas", "Vídeos").forEach { label ->
-            FilterChip(selected = selected == label, onClick = { selected = label; onSelected(label) }, label = { Text(label) }, shape = CircleShape,
-                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.inverseSurface, selectedLabelColor = MaterialTheme.colorScheme.inverseOnSurface))
-        }
     }
 }

@@ -1,12 +1,19 @@
 package com.pedroaba.spix.ui.theme
 
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 
 object SpixColors {
     val Red = Color(0xFFC30027)
@@ -55,5 +62,61 @@ private val DarkColors = darkColorScheme(
 
 @Composable
 fun SpixTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = if (darkTheme) DarkColors else LightColors, typography = Typography(), content = content)
+    val lightness by animateFloatAsState(
+        targetValue = if (darkTheme) 0f else 1f,
+        animationSpec = tween(durationMillis = 440, easing = CubicBezierEasing(.22f, .05f, .26f, 1f)),
+        label = "Spix theme",
+    )
+    val colors = remember(lightness) {
+        when (lightness) {
+            0f -> DarkColors
+            1f -> LightColors
+            else -> blendTheme(DarkColors, LightColors, lightness)
+        }
+    }
+    MaterialTheme(colorScheme = colors, typography = SpixTypography, content = content)
+}
+
+private val SpixTypography = Typography()
+
+private fun blendTheme(from: ColorScheme, to: ColorScheme, fraction: Float): ColorScheme {
+    fun blend(start: Color, end: Color) = lerp(start, end, fraction)
+    return from.copy(
+        primary = blend(from.primary, to.primary),
+        onPrimary = blend(from.onPrimary, to.onPrimary),
+        primaryContainer = blend(from.primaryContainer, to.primaryContainer),
+        onPrimaryContainer = blend(from.onPrimaryContainer, to.onPrimaryContainer),
+        inversePrimary = blend(from.inversePrimary, to.inversePrimary),
+        secondary = blend(from.secondary, to.secondary),
+        onSecondary = blend(from.onSecondary, to.onSecondary),
+        secondaryContainer = blend(from.secondaryContainer, to.secondaryContainer),
+        onSecondaryContainer = blend(from.onSecondaryContainer, to.onSecondaryContainer),
+        tertiary = blend(from.tertiary, to.tertiary),
+        onTertiary = blend(from.onTertiary, to.onTertiary),
+        tertiaryContainer = blend(from.tertiaryContainer, to.tertiaryContainer),
+        onTertiaryContainer = blend(from.onTertiaryContainer, to.onTertiaryContainer),
+        background = blend(from.background, to.background),
+        onBackground = blend(from.onBackground, to.onBackground),
+        surface = blend(from.surface, to.surface),
+        onSurface = blend(from.onSurface, to.onSurface),
+        surfaceVariant = blend(from.surfaceVariant, to.surfaceVariant),
+        onSurfaceVariant = blend(from.onSurfaceVariant, to.onSurfaceVariant),
+        surfaceTint = blend(from.surfaceTint, to.surfaceTint),
+        inverseSurface = blend(from.inverseSurface, to.inverseSurface),
+        inverseOnSurface = blend(from.inverseOnSurface, to.inverseOnSurface),
+        error = blend(from.error, to.error),
+        onError = blend(from.onError, to.onError),
+        errorContainer = blend(from.errorContainer, to.errorContainer),
+        onErrorContainer = blend(from.onErrorContainer, to.onErrorContainer),
+        outline = blend(from.outline, to.outline),
+        outlineVariant = blend(from.outlineVariant, to.outlineVariant),
+        scrim = blend(from.scrim, to.scrim),
+        surfaceBright = blend(from.surfaceBright, to.surfaceBright),
+        surfaceDim = blend(from.surfaceDim, to.surfaceDim),
+        surfaceContainer = blend(from.surfaceContainer, to.surfaceContainer),
+        surfaceContainerHigh = blend(from.surfaceContainerHigh, to.surfaceContainerHigh),
+        surfaceContainerHighest = blend(from.surfaceContainerHighest, to.surfaceContainerHighest),
+        surfaceContainerLow = blend(from.surfaceContainerLow, to.surfaceContainerLow),
+        surfaceContainerLowest = blend(from.surfaceContainerLowest, to.surfaceContainerLowest),
+    )
 }

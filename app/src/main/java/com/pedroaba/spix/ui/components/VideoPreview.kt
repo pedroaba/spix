@@ -28,11 +28,16 @@ import coil3.compose.AsyncImage
 import com.pedroaba.spix.domain.VideoPreviewState
 
 @Composable
-fun VideoThumbnail(url: String?, modifier: Modifier = Modifier) {
-    Box(modifier.background(MaterialTheme.colorScheme.surfaceContainer), contentAlignment = Alignment.Center) {
+fun VideoThumbnail(
+    url: String?,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+    containerColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.surfaceContainer,
+) {
+    Box(modifier.background(containerColor), contentAlignment = Alignment.Center) {
         Icon(SpixIcons.Library, null, Modifier.size(28.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         if (url != null) AsyncImage(model = url, contentDescription = null,
-            modifier = Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+            modifier = Modifier.matchParentSize(), contentScale = contentScale)
     }
 }
 
@@ -49,6 +54,7 @@ fun VideoPreview(state: VideoPreviewState, motion: Boolean, onRetry: () -> Unit)
                 VideoPreviewState.Idle -> "idle"
                 is VideoPreviewState.Loading -> "loading:${it.videoId}"
                 is VideoPreviewState.Ready -> "ready:${it.video.videoId}"
+                is VideoPreviewState.PlaylistReady -> "playlist:${it.playlist.playlistId}"
                 is VideoPreviewState.Failed -> "failed:${it.videoId}"
             } },
             transitionSpec = {
@@ -77,13 +83,24 @@ private fun VideoPreviewContent(state: VideoPreviewState, motion: Boolean, onRet
                 }
             }
         }
+        is VideoPreviewState.PlaylistReady -> Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+            Column {
+                VideoThumbnail(state.playlist.videos.firstOrNull()?.thumbnailUrl, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)))
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(state.playlist.title, fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Playlist · ${state.playlist.videos.size} ${if (state.playlist.videos.size == 1) "vídeo" else "vídeos"}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Todos os vídeos disponíveis serão adicionados aos downloads.", style = MaterialTheme.typography.bodyMedium)
+                    if (state.playlist.unavailableCount > 0) Text("Itens indisponíveis: ${state.playlist.unavailableCount}.", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
         is VideoPreviewState.Ready -> Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
             Column {
                 VideoThumbnail(state.video.thumbnailUrl, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)))
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(state.video.title, fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+                    Text(state.video.title, fontSize = 21.sp, lineHeight = 29.sp, fontWeight = FontWeight.Bold)
                     Text(state.video.author, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-                    Text("Prévia do YouTube", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                    Text("Vídeo com áudio · até 720p", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -113,7 +130,7 @@ private fun VideoPreviewSkeleton(motion: Boolean) {
     }
     Surface(
         modifier = Modifier.fillMaxWidth().clearAndSetSemantics {
-            contentDescription = "Buscando informações do vídeo"
+            contentDescription = "Buscando informações do YouTube"
             liveRegion = LiveRegionMode.Polite
         },
         shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,

@@ -2,6 +2,11 @@ package com.pedroaba.spix.download
 
 import android.content.Context
 import com.pedroaba.spix.R
+import com.pedroaba.spix.data.PlaylistMetadataSource
+import com.pedroaba.spix.data.PlaylistUnavailableException
+import com.pedroaba.spix.data.parsePlaylist
+import com.pedroaba.spix.domain.PlaylistMetadata
+import com.pedroaba.spix.domain.YouTubePlaylistLink
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.ffmpeg.FFmpeg
@@ -13,25 +18,12 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class YouTubeDownloader(private val context: Context) {
+class YouTubeDownloader(private val context: Context) : PlaylistMetadataSource {
     private val gate = Mutex()
 
     internal suspend fun download(url: String, directory: File, processId: String, progress: (DownloadUpdate) -> Unit): File = gate.withLock {
         progress(DownloadUpdate.Preparing)
-        withContext(Dispatchers.IO) {
-            // Pin the extractor separately from the Android native runtime bundled by the wrapper.
-            val extractor = File(context.noBackupFilesDir, "${YoutubeDL.baseName}/${YoutubeDL.ytdlpDirName}/${YoutubeDL.ytdlpBin}")
-            val version = context.getSharedPreferences("spix_engine", Context.MODE_PRIVATE)
-            if (version.getString("extractor", null) != "2026.10.26" || !extractor.isFile) {
-                check(extractor.parentFile!!.isDirectory || extractor.parentFile!!.mkdirs())
-                val temporary = File(extractor.parentFile, "yt-dlp.tmp")
-                context.resources.openRawResource(R.raw.ytdlp).use { input -> temporary.outputStream().use { input.copyTo(it) } }
-                check(temporary.renameTo(extractor))
-                check(version.edit().putString("extractor", "2026.10.26").commit())
-            }
-            YoutubeDL.getInstance().init(context)
-            FFmpeg.getInstance().init(context)
-        }
+        initialize()
         coroutineScope {
             val execution = async(Dispatchers.IO) {
                 check(directory.isDirectory || directory.mkdirs())
@@ -46,9 +38,9 @@ class YouTubeDownloader(private val context: Context) {
                     addOption("--progress-template", DownloadProgressParser.PROCESSING_TEMPLATE)
                     addOption("--ignore-config")
                     addOption("--no-mtime")
-                    addOption("--socket-timeout", 20)
-                    addOption("--retries", 3)
-                    addOption("--fragment-retries", 3)
+                    addOption("--socket-timeout", 10)
+                    addOption("--retries", 1)
+                    addOption("--fragment-retries", 1)
                     addOption("--max-filesize", "2G")
                     addOption("--match-filters", "!is_live")
                     addOption("-f", "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/b[height<=720]")
@@ -73,15 +65,79 @@ class YouTubeDownloader(private val context: Context) {
                 }
             }
             try { execution.await() }
-            finally {
-                val cancelled = !currentCoroutineContext().isActive
-                withContext(NonCancellable + Dispatchers.IO) {
-                    if (cancelled) YoutubeDL.getInstance().destroyProcessById(processId)
-                    terminateNativeChildren()
+            finally { finishProcess(processId, execution) }
+        }
+    }
+    private suspend fun initialize() {
+        withContext(Dispatchers.IO) {
+            // Pin the extractor separately from the Android native runtime bundled by the wrapper.
+            val extractor = File(context.noBackupFilesDir, "${YoutubeDL.baseName}/${YoutubeDL.ytdlpDirName}/${YoutubeDL.ytdlpBin}")
+            val version = context.getSharedPreferences("spix_engine", Context.MODE_PRIVATE)
+            if (version.getString("extractor", null) != "2026.10.26" || !extractor.isFile) {
+                check(extractor.parentFile!!.isDirectory || extractor.parentFile!!.mkdirs())
+                val temporary = File(extractor.parentFile, "yt-dlp.tmp")
+                context.resources.openRawResource(R.raw.ytdlp).use { input -> temporary.outputStream().use { input.copyTo(it) } }
+                check(temporary.renameTo(extractor))
+                check(version.edit().putString("extractor", "2026.10.26").commit())
+            }
+            YoutubeDL.getInstance().init(context)
+            FFmpeg.getInstance().init(context)
+        }
+    }
+
+    override suspend fun fetchPlaylist(link: YouTubePlaylistLink): PlaylistMetadata = fetchPlaylist(link, allowEmpty = false)
+
+    override suspend fun fetchForSync(link: YouTubePlaylistLink): PlaylistMetadata = fetchPlaylist(link, allowEmpty = true)
+
+    private suspend fun fetchPlaylist(link: YouTubePlaylistLink, allowEmpty: Boolean): PlaylistMetadata = gate.withLock {
+        initialize()
+        val processId = "playlist-${java.util.UUID.randomUUID()}"
+        withTimeout(120_000) {
+            coroutineScope {
+                val execution = async(Dispatchers.IO) {
+                    val request = YoutubeDLRequest(link.url).apply {
+                        addOption("--ignore-config")
+                        addOption("--flat-playlist")
+                        addOption("--dump-single-json")
+                        addOption("--yes-playlist")
+                        addOption("--skip-download")
+                        addOption("--no-warnings")
+                        addOption("--socket-timeout", 10)
+                        addOption("--retries", 1)
+                        addOption("--extractor-retries", 1)
+                    }
+                    val response = try {
+                        YoutubeDL.getInstance().execute(request, processId)
+                    } catch (error: YoutubeDLException) {
+                        val message = error.message.orEmpty().lowercase()
+                        if (allowEmpty && listOf("playlist does not exist", "playlist is private", "playlist is unavailable",
+                                "playlist is not available", "playlist not found", "this playlist is private").any(message::contains)) {
+                            throw PlaylistUnavailableException("A playlist do YouTube está inacessível.", error)
+                        }
+                        throw error
+                    }
+                    parsePlaylist(link, response.out, allowEmpty)
                 }
+                try { execution.await() }
+                finally { finishProcess(processId, execution) }
             }
         }
     }
+
+    private suspend fun finishProcess(processId: String, execution: Job) {
+        val cancelled = !currentCoroutineContext().isActive
+        withContext(NonCancellable + Dispatchers.IO) {
+            if (cancelled) {
+                // execute() may register its native process just after cancellation.
+                do {
+                    YoutubeDL.getInstance().destroyProcessById(processId)
+                    terminateNativeChildren()
+                    if (!execution.isCompleted) delay(100)
+                } while (!execution.isCompleted)
+            } else terminateNativeChildren()
+        }
+    }
+
     /** The upstream cancellation helper may leave qjs/ffmpeg children orphaned.
      * The gate guarantees no other download owns these binaries while cleaning up. */
     private fun terminateNativeChildren() {

@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -18,7 +19,7 @@ android {
     // AGP 9.2.1 crashes in this detector while inspecting WorkManager Kotlin symbols. No WebViews are used.
     lint { disable += "WebViewApiAvailability" }
     packaging { jniLibs.useLegacyPackaging = true }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -31,19 +32,42 @@ android {
         }
         create("performance") {
             initWith(getByName("release"))
+            applicationIdSuffix = ".benchmark"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+        }
+        create("lab") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".lab"
+            matchingFallbacks += "debug"
+        }
+        create("optimized") {
+            initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += "release"
         }
     }
+    testBuildType = "lab"
 }
 
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
 dependencies {
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    implementation(libs.room.paging)
+    implementation(libs.paging.compose)
+    ksp(libs.room.compiler)
+    androidTestImplementation(libs.paging.testing)
+
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.preview)
     implementation(libs.activity.compose)
+    implementation(libs.core.splashscreen)
+    implementation(libs.lottie)
     implementation(libs.lifecycle.compose)
     implementation(libs.lifecycle.viewmodel)
     implementation(libs.navigation.compose)

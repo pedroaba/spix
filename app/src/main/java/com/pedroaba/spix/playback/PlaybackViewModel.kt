@@ -19,9 +19,12 @@ data class PlaybackInfo(
     val connected: Boolean = false, val mediaId: String? = null, val title: String = "", val artist: String = "",
     val artwork: String? = null, val playing: Boolean = false, val buffering: Boolean = false,
     val duration: Long = 0, val shuffle: Boolean = false, val repeat: Int = Player.REPEAT_MODE_OFF,
-    val video: Boolean = false, val aspect: Float = 16f / 9f, val error: String? = null,
-    val queue: List<QueueEntry> = emptyList(), val index: Int = 0,
+    val video: Boolean = true, val aspect: Float = 16f / 9f, val error: String? = null,
+    val queue: List<QueueEntry> = emptyList(), val index: Int = 0, val queueTitle: String = "Fila de reprodução",
+    val playlistId: String? = null,
 )
+private const val PLAYLIST_ID_EXTRA = "com.pedroaba.spix.PLAYLIST_ID"
+@androidx.compose.runtime.Immutable
 data class QueueEntry(val id: String, val title: String, val artist: String, val artwork: String?)
 
 class PlaybackViewModel(application: Application) : AndroidViewModel(application) {
@@ -34,11 +37,46 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         private set
     private var future: ListenableFuture<MediaController>? = null
     private var closed = false
-    private var pendingUri: String? = null
-    private var desiredVideo = false
-    private var surfaceVisible = false
+    private data class PendingOpen(val uri: String, val playlistId: String?)
+    private var pendingOpen: PendingOpen? = null
+    private var activePlaylistId: String? = null
+    private var desiredVideo = true
+    private var openJob: Job? = null
+    private var queueImportJob: Job? = null
+    private var queueSnapshot: List<QueueEntry> = emptyList()
+    private var queueIds: List<String> = emptyList()
+    private var pendingSnapshot: List<QueueEntry>? = null
+    private var activePlaylistTitle = "Fila de reprodução"
     private val listener = object : Player.Listener {
-        override fun onEvents(player: Player, events: Player.Events) = refresh()
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (events.contains(Player.EVENT_TIMELINE_CHANGED)) updateQueueSnapshot(player)
+            refresh()
+        }
+    }
+
+    private fun updateQueueSnapshot(player: Player) {
+        queueImportJob?.cancel()
+        val pending = pendingSnapshot
+        if (pending != null && pending.size == player.mediaItemCount) {
+            queueSnapshot = pending
+            queueIds = pending.map { it.id }
+            pendingSnapshot = null
+            return
+        }
+        if (player.mediaItemCount == 0) {
+            queueSnapshot = emptyList(); queueIds = emptyList(); return
+        }
+        // Controller access stays on its application thread; bounded chunks yield to input/drawing.
+        queueImportJob = viewModelScope.launch {
+            val result = ArrayList<QueueEntry>(player.mediaItemCount)
+            repeat(player.mediaItemCount) { index ->
+                ensureActive()
+                val item = player.getMediaItemAt(index)
+                result += QueueEntry(item.mediaId, item.mediaMetadata.title?.toString().orEmpty(), item.mediaMetadata.artist?.toString().orEmpty(), item.mediaMetadata.artworkUri?.toString())
+                if (index % 40 == 39) delay(1)
+            }
+            queueSnapshot = result.toList(); queueIds = result.map { it.id }; refresh()
+        }
     }
 
     init {
@@ -70,33 +108,61 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
             runCatching { connection.get() }.onSuccess { player ->
                 controller = player
                 player.addListener(listener)
+                applyVideo()
+                updateQueueSnapshot(player)
                 refresh()
-                pendingUri?.let { uri -> pendingUri = null; open(uri) }
+                pendingOpen?.let { pending -> pendingOpen = null; open(pending.uri, pending.playlistId) }
             }.onFailure {
                 mutableInfo.update { it.copy(error = "Não foi possível conectar ao player. Tente novamente.") }
             }
         }, ContextCompat.getMainExecutor(app))
     }
 
-    fun open(uri: String) {
+    fun open(uri: String, playlistId: String? = null) {
         val player = controller
-        if (player == null) { pendingUri = uri; return }
-        val downloads = app.repository.requests.value.filter { it.status == DownloadStatus.Completed && it.localUri != null }
-        val selected = downloads.indexOfFirst { it.localUri == uri }
-        if (selected < 0) { mutableInfo.update { it.copy(error = "Este vídeo não está disponível na biblioteca.") }; return }
-        if (player.currentMediaItem?.mediaId != downloads[selected].videoId || player.mediaItemCount == 0) {
-            val items = downloads.map { item ->
-                MediaItem.Builder().setMediaId(item.videoId).setUri(item.localUri!!)
-                    .setMediaMetadata(MediaMetadata.Builder().setTitle(item.metadata?.title ?: "Vídeo")
-                        .setArtist(item.metadata?.author ?: "YouTube")
-                        .setArtworkUri(item.metadata?.thumbnailUrl?.let(Uri::parse)).build()).build()
+        if (player == null) { pendingOpen = PendingOpen(uri, playlistId); return }
+        openJob?.cancel()
+        openJob = viewModelScope.launch {
+            val available = app.repository.playbackQueue()
+            val playlist = playlistId?.let { app.localPlaylists.get(it) }
+            if (playlistId != null && playlist == null) {
+                mutableInfo.update { it.copy(error = "Esta playlist não está mais disponível.") }
+                return@launch
             }
-            player.setMediaItems(items, selected, 0)
-            player.prepare()
-        } else if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
-        else if (player.playerError != null) player.prepare()
-        player.play()
-        refresh()
+            val downloads = withContext(Dispatchers.Default) { playlistQueue(available, playlist) }
+            val selected = downloads.indexOfFirst { it.localUri == uri }
+            if (selected < 0) { mutableInfo.update { it.copy(error = "Este vídeo não está disponível na biblioteca.") }; return@launch }
+            val ids = downloads.map { it.videoId }
+            val sameQueue = activePlaylistId == playlistId && queueIds == ids
+            activePlaylistId = playlistId
+            activePlaylistTitle = playlist?.name ?: "Fila de reprodução"
+            if (!sameQueue) {
+                val items = withContext(Dispatchers.Default) {
+                    val playlistExtras = playlistId?.let { id ->
+                        android.os.Bundle().apply { putString(PLAYLIST_ID_EXTRA, id) }
+                    }
+                    downloads.map { item ->
+                        MediaItem.Builder().setMediaId(item.videoId).setUri(item.localUri!!)
+                            .setMediaMetadata(MediaMetadata.Builder().setTitle(item.metadata?.title ?: "Vídeo")
+                                .setArtist(item.metadata?.author ?: "YouTube")
+                                .setArtworkUri(item.metadata?.thumbnailUrl?.let(Uri::parse))
+                                .setExtras(playlistExtras).build()).build()
+                    }
+                }
+                ensureActive()
+                if (controller !== player || closed) return@launch
+                pendingSnapshot = downloads.map { QueueEntry(it.videoId, it.metadata?.title ?: "Vídeo", it.metadata?.author ?: "YouTube", it.metadata?.thumbnailUrl) }
+                queueSnapshot = requireNotNull(pendingSnapshot); queueIds = ids
+                player.setMediaItems(items, selected, 0)
+                player.prepare()
+            } else if (player.currentMediaItemIndex != selected) {
+                player.seekToDefaultPosition(selected)
+                if (player.playbackState == Player.STATE_IDLE) player.prepare()
+            } else if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+            else if (player.playerError != null) player.prepare()
+            player.play()
+            refresh()
+        }
     }
 
     fun togglePlay() { controller?.let(::togglePlayback) }
@@ -106,11 +172,20 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     fun select(index: Int) { controller?.run { seekToDefaultPosition(index); prepare(); play() } }
     fun shuffle() { controller?.run { shuffleModeEnabled = !shuffleModeEnabled } }
     fun repeat() { controller?.run { repeatMode = when (repeatMode) { Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL; Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF } } }
+    fun removeDeleted(videoId: String) {
+        controller?.let { player ->
+            for (index in player.mediaItemCount - 1 downTo 0) {
+                if (player.getMediaItemAt(index).mediaId == videoId) player.removeMediaItem(index)
+            }
+        }
+    }
     fun stop() { controller?.run { stop(); clearMediaItems() } }
     fun retry() {
         if (controller == null) {
-            pendingUri = app.repository.requests.value.firstOrNull { it.videoId == info.value.mediaId }?.localUri ?: pendingUri
-            connect()
+            viewModelScope.launch {
+                info.value.mediaId?.let { app.repository.get(it) }?.localUri?.let { pendingOpen = PendingOpen(it, activePlaylistId) }
+                connect()
+            }
         } else controller?.run { prepare(); play() }
     }
     fun video(enabled: Boolean) {
@@ -119,9 +194,15 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         if (!enabled && controller?.playerError != null) controller?.prepare()
         refresh()
     }
-    fun surface(visible: Boolean) { surfaceVisible = visible; applyVideo() }
     private fun applyVideo() {
-        controller?.run { trackSelectionParameters = trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !desiredVideo || !surfaceVisible).build() }
+        // Visibility changes must not reselect tracks: that can flush audio as well as video.
+        // ExoPlayer handles missing surfaces; only the explicit audio-only mode disables video.
+        controller?.run {
+            if (trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_VIDEO) != !desiredVideo) {
+                trackSelectionParameters = trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !desiredVideo).build()
+            }
+        }
     }
 
     private fun refresh() {
@@ -137,8 +218,10 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
             shuffle = player.shuffleModeEnabled, repeat = player.repeatMode, video = desiredVideo,
             aspect = if (size.width > 0 && size.height > 0) size.width * size.pixelWidthHeightRatio / size.height else 16f / 9f,
             error = player.playerError?.let { "Não foi possível reproduzir este arquivo. Verifique se ele ainda existe e se o formato é compatível." },
-            queue = List(player.mediaItemCount) { index -> player.getMediaItemAt(index).let { QueueEntry(it.mediaId, it.mediaMetadata.title?.toString().orEmpty(), it.mediaMetadata.artist?.toString().orEmpty(), it.mediaMetadata.artworkUri?.toString()) } },
+            queue = queueSnapshot,
             index = player.currentMediaItemIndex.coerceAtLeast(0),
+            queueTitle = activePlaylistTitle,
+            playlistId = player.currentMediaItem?.mediaMetadata?.extras?.getString(PLAYLIST_ID_EXTRA),
         )
         mutablePosition.value = player.currentPosition.coerceAtLeast(0)
     }
@@ -159,3 +242,10 @@ internal fun togglePlayback(player: Player) {
         player.play()
     }
 }
+
+/** A playlist queue keeps its own order and never falls back to the whole library. */
+internal fun playlistQueue(
+    available: List<com.pedroaba.spix.domain.DownloadRequest>,
+    playlist: com.pedroaba.spix.data.LocalPlaylist?,
+): List<com.pedroaba.spix.domain.DownloadRequest> = if (playlist == null) available else
+    available.associateBy { it.videoId }.let { byId -> playlist.videoIds.distinct().mapNotNull(byId::get) }

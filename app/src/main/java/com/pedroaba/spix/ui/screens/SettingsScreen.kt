@@ -1,6 +1,9 @@
 package com.pedroaba.spix.ui.screens
 
+import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
+import android.text.format.Formatter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -23,10 +26,14 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.pedroaba.spix.data.SpixRepository
+import com.pedroaba.spix.data.StorageUsage
+import com.pedroaba.spix.data.readStorageUsage
 import com.pedroaba.spix.domain.AppSettings
 import com.pedroaba.spix.domain.StorageLocation
 import com.pedroaba.spix.domain.ThemeMode
 import com.pedroaba.spix.ui.components.SpixIcons
+import java.text.NumberFormat
 
 @Composable
 fun SettingsScreen(
@@ -40,13 +47,28 @@ fun SettingsScreen(
     onDefaultFolder: () -> Unit,
     onRefresh: () -> Unit,
     onPickerUnavailable: () -> Unit,
+    storageRepository: SpixRepository,
+    onManageDownloads: () -> Unit,
 ) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) onFolder(uri)
     }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val power = remember(context) { context.getSystemService(android.os.PowerManager::class.java) }
+    var unrestricted by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(context.packageName)) }
+    var storageRefresh by remember { mutableIntStateOf(0) }
+    var storageSettingsUnavailable by remember { mutableStateOf(false) }
+    val storage by produceState<StorageUsage?>(null, storageRepository, storageRefresh) {
+        value = null
+        value = readStorageUsage(context.applicationContext, storageRepository)
+    }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) onRefresh() }
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) {
+            unrestricted = power.isIgnoringBatteryOptimizations(context.packageName)
+            onRefresh()
+            storageRefresh++
+        } }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
@@ -69,6 +91,20 @@ fun SettingsScreen(
         }
         item {
             SectionLabel("ARMAZENAMENTO")
+            StorageUsageCard(
+                usage = storage,
+                onRefresh = { storageRefresh++ },
+                onManageDownloads = onManageDownloads,
+                onOpenAndroidStorage = {
+                    storageSettingsUnavailable = runCatching {
+                        val appUri = Uri.fromParts("package", context.packageName, null)
+                        context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, appUri))
+                    }.isFailure
+                },
+                androidSettingsUnavailable = storageSettingsUnavailable,
+            )
+        }
+        item {
             SettingsCard {
                 Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     Icon(SpixIcons.Folder, null, tint = if (location.available) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
@@ -93,6 +129,24 @@ fun SettingsScreen(
                     else "Os vídeos ficam em Downloads/Spix e permanecem no celular ao desinstalar o app.",
                     Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+        item {
+            SectionLabel("DOWNLOADS EM SEGUNDO PLANO")
+            SettingsCard {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (unrestricted) "Bateria sem restrição" else "Permitir downloads com a tela bloqueada", fontWeight = FontWeight.SemiBold)
+                    Text(if (unrestricted) "O Spix pode continuar as transferências com a tela apagada."
+                        else "Para baixar listas longas, permita que o Spix use a bateria sem restrições. Se o Android suspender a conexão, a fila aguarda e tenta novamente automaticamente.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(onClick = {
+                        val batterySettings = android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        runCatching { context.startActivity(batterySettings) }.onFailure {
+                            context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:${context.packageName}")))
+                        }
+                    }) { Text("Configurar bateria no Android") }
+                }
             }
         }
         item {
@@ -122,6 +176,89 @@ fun SettingsScreen(
                     Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+    }
+}
+
+@Composable
+private fun StorageUsageCard(
+    usage: StorageUsage?,
+    onRefresh: () -> Unit,
+    onManageDownloads: () -> Unit,
+    onOpenAndroidStorage: () -> Unit,
+    androidSettingsUnavailable: Boolean,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val storageNumber = remember { NumberFormat.getNumberInstance().apply { maximumFractionDigits = 1 } }
+    fun size(bytes: Long) = Formatter.formatFileSize(context, bytes)
+    fun capacity(bytes: Long) = "${storageNumber.format(bytes / 1_073_741_824.0)} GiB"
+    val secondary = MaterialTheme.colorScheme.onSurfaceVariant
+    SettingsCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Armazenamento interno", fontWeight = FontWeight.SemiBold)
+            if (usage == null) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("Consultando espaço…", style = MaterialTheme.typography.bodySmall, color = secondary)
+            } else {
+                val device = usage.device
+                if (device != null && device.total > 0) {
+                    val used = device.total - device.available
+                    Text("${capacity(device.available)} disponíveis", style = MaterialTheme.typography.titleLarge)
+                    LinearProgressIndicator(
+                        progress = { (used.toDouble() / device.total).toFloat().coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text("${capacity(used)} em uso de ${capacity(device.total)}", style = MaterialTheme.typography.bodySmall, color = secondary)
+                } else {
+                    Text("Espaço do celular indisponível.", style = MaterialTheme.typography.bodySmall, color = secondary)
+                }
+                HorizontalDivider()
+                val downloads = usage.downloads
+                if (downloads != null) {
+                    val measured = if (downloads.count > 0 && downloads.unknownSizes == downloads.count) {
+                        "Indisponível"
+                    } else {
+                        size(downloads.measuredBytes)
+                    }
+                    StorageUsageRow("Arquivos baixados (${downloads.count})", measured)
+                    if (downloads.unknownSizes > 0) {
+                        Text("Tamanho indisponível para ${downloads.unknownSizes} arquivo(s).",
+                            style = MaterialTheme.typography.bodySmall, color = secondary)
+                    }
+                } else {
+                    StorageUsageRow("Arquivos baixados", "Indisponível")
+                }
+                val app = usage.app
+                if (app != null) {
+                    StorageUsageRow("Instalação do Spix", size(app.installation))
+                    StorageUsageRow("Dados do Spix", size(app.data))
+                    StorageUsageRow("Cache do Spix", size(app.cache))
+                } else {
+                    StorageUsageRow("Dados e cache do Spix", "Indisponível")
+                }
+            }
+            OutlinedButton(onClick = onManageDownloads, modifier = Modifier.fillMaxWidth()) {
+                Text("Gerenciar arquivos baixados")
+            }
+            OutlinedButton(onClick = onOpenAndroidStorage, modifier = Modifier.fillMaxWidth()) {
+                Text("Informações do Spix no Android")
+            }
+            if (androidSettingsUnavailable) {
+                Text("Não foi possível abrir as informações do Spix no Android.", color = MaterialTheme.colorScheme.error)
+            } else {
+                Text("Toque em Armazenamento na tela de informações do app.", style = MaterialTheme.typography.bodySmall, color = secondary)
+            }
+            TextButton(onClick = onRefresh, enabled = usage != null, modifier = Modifier.align(Alignment.End)) {
+                Text("Atualizar")
+            }
+        }
+    }
+}
+
+@Composable
+private fun StorageUsageRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

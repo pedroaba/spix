@@ -125,7 +125,7 @@ O Git está inicializado na branch `main`, sem remoto. O commit `f208cbf` preser
 - A extração e a junção ocorrem no cache interno. Ao concluir, a gravação usa `MediaStore.Downloads` com `RELATIVE_PATH=Download/Spix/` e `IS_PENDING` no Android 10+. A publicação ocorre só depois de fechar a gravação. No Android 8/9, usa a mesma pasta pública com permissão de escrita.
 - A pasta padrão é **Downloads/Spix**. A pasta escolhida em Configurações usa a permissão SAF persistida. Mudar o destino não move vídeos existentes. Cancelamento ou falha remove arquivos públicos incompletos e o cache temporário dessa tarefa.
 - Cancelar interrompe o processo do extrator e limpa auxiliares nativos do mesmo UID; essa limpeza ocorre com o motor serializado, para não atingir outro download. Tentar novamente começa uma nova tentativa. O trabalho pode ser reexecutado pelo Android após interrupção; não há promessa de retomada byte a byte entre processos. Forçar a parada do app interrompe o serviço até o Android permitir nova execução.
-- A biblioteca contém somente arquivos concluídos. “Reproduzir” abre o player interno com a fila offline. Remover da lista preserva o arquivo na pasta pública.
+- A biblioteca contém somente arquivos concluídos. “Reproduzir” abre o player interno com a fila offline. Excluir do celular remove o arquivo físico e, depois, o registro da biblioteca e os membros das playlists. Se o arquivo não puder ser excluído, o registro é mantido para nova tentativa.
 
 A primeira preparação descompacta Python e FFmpeg; o APK universal de desenvolvimento inclui bibliotecas nativas de várias arquiteturas. Notificações são solicitadas no Android 13+; negá-las não impede a tarefa. No Android 8/9, negar armazenamento impede a gravação padrão e apresenta orientação.
 
@@ -140,15 +140,15 @@ Validação dos downloads: build debug, dez testes JVM e lint passaram. No emula
 Para avaliar a fluidez, gere e instale a variante otimizada local (R8, recursos reduzidos e sem depuração):
 
 ```sh
-./gradlew :app:assemblePerformance
-adb -s SERIAL install --no-streaming -r app/build/outputs/apk/performance/app-performance.apk
+./gradlew :app:assembleOptimized
+adb -s SERIAL install --no-streaming -r app/build/outputs/apk/optimized/app-optimized.apk
 ```
 
-`performance` usa a assinatura de desenvolvimento já instalada para preservar os dados durante os testes locais. `release` continua com a configuração de distribuição separada. O modo `debug` mantém as ferramentas do Compose e serve para depuração.
+`optimized` usa a assinatura de desenvolvimento já instalada para preservar os dados durante os testes locais. `performance` instala um app separado (`.benchmark`) com catálogo sintético. `release` continua com a configuração de distribuição separada. O modo `debug` mantém as ferramentas do Compose e serve para depuração.
 
 As abas usam fade-through: a tela anterior desaparece antes de a próxima entrar. As telas de detalhe usam um deslocamento curto na entrada. O cabeçalho compartilhado fica fora do NavHost e a barra inferior não anima a própria altura, evitando recalcular o espaço do Scaffold a cada quadro. A saída tem fade curto e a entrada é adiada para evitar sobreposição de telas opacas. Tocar novamente na aba ativa não recria a navegação.
 
-Cada destino observa seus próprios fluxos de estado, para que digitação e progresso dos downloads não invalidem a estrutura global. Biblioteca e busca usam LazyColumn, chaves estáveis e filtros memorizados. O shimmer lê a animação no desenho e reutiliza o gradiente; pausa enquanto a tela não está RESUMED. A preferência de animações desativadas continua sendo respeitada.
+Cada destino observa seus próprios fluxos de estado, para que digitação e progresso dos downloads não invalidem a estrutura global. Todas as listagens de conteúdo usam LazyColumn com Paging 3, chaves estáveis e consultas paginadas no Room. O shimmer lê a animação no desenho e reutiliza o gradiente; pausa enquanto a tela não está RESUMED. A preferência de animações desativadas continua sendo respeitada.
 
 Coleta reproduzível no aparelho (deixe o Spix aberto e não interaja durante a execução):
 
@@ -184,7 +184,11 @@ No Galaxy A52, um download real foi gravado e conferido quadro a quadro: a UI ex
 
 ## Player interno de música e vídeo
 
-Os botões “Reproduzir” da home, biblioteca, downloads e busca abrem o player do Spix, inspirado na referência do YouTube Music. A tela usa fundo preto, seletor Música/Vídeo, capa ou vídeo centralizado, título/canal, progresso com tempos válidos, play/pause, anterior/próximo, aleatório, repetição e fila “A seguir”. O menu permite abrir a fila, reiniciar a faixa ou encerrar a reprodução. Os ícones são Fluent oficiais.
+Tocar no card de um vídeo baixado na home, biblioteca, downloads ou busca abre o player e inicia a reprodução. A folha de opções oferece “Ouvir agora”; ações de remover, cancelar e tentar novamente mantêm seu comportamento próprio. O player é inspirado na referência do YouTube Music. A tela acompanha o tema Sistema, Claro ou Escuro do app, incluindo fundo, textos, controles, menu, fila e barras do Android. O player tem seletor Música/Vídeo, capa ou vídeo centralizado, título/canal, progresso com tempos válidos, play/pause, anterior/próximo, aleatório, repetição e fila “A seguir”. O menu permite abrir a fila, reiniciar a faixa ou encerrar a reprodução. Os ícones são Fluent oficiais.
+
+O vídeo ocupa toda a largura disponível, sem margens laterais ou cantos arredondados, e tem altura 25% maior que a proporção natural do arquivo. A imagem preenche essa área com zoom centralizado, sem distorção e com corte nas laterais; vídeos verticais podem aumentar a área rolável. O seletor Música/Vídeo tem altura visual de 36 dp, área de toque de 48 dp e respiro adicional de 16 dp acima do cabeçalho. Títulos e controles mantêm margens de 20 dp. O ajuste foi conferido no Galaxy A52 nos dois modos; build performance, 18 testes JVM e lint passaram (com avisos existentes).
+
+No modo Música, a thumbnail ocupa a mesma área e proporção de exibição do vídeo, com largura total e sem cantos arredondados. A imagem usa ajuste integral (`ContentScale.Fit`), preservando seu conteúdo e proporção; diferenças de formato ficam com o fundo do tema, sem recorte ou distorção. A área de mídia mantém a mesma altura entre os modos.
 
 O Media3 1.11.1 mantém o ExoPlayer em um MediaSessionService com foco de áudio, tratamento da desconexão de fones, wake lock local e controles de mídia do Android. Música desabilita a trilha de vídeo do mesmo MP4; Vídeo reabilita a renderização mantendo a posição. Ao minimizar ou colocar o app em segundo plano, o áudio continua e a renderização de vídeo é desativada. O miniplayer permite reabrir, pausar e encerrar a sessão. A fila é criada a partir dos arquivos concluídos; não há reprodução de links pendentes nem download adicional para escutar.
 
@@ -192,4 +196,85 @@ O progresso é observado em um fluxo separado, somente enquanto a interface o ob
 
 Validação: build debug/otimizado, 18 testes JVM e lint passaram. No Galaxy A52 foram conferidos áudio, vídeo, troca de modo sem reiniciar posição, miniplayer, fila, ciclo de repetição e reinício da faixa. Ao deixar o app em segundo plano, a posição passou de 0:27 para 0:36 e o serviço permaneceu em foreground `mediaPlayback`. Capturas reais: `design/android-player-musica.png` e `design/android-player-video.png`.
 
+Ajustes do player e dos cards: build debug e lint passaram. No Galaxy A52, foram conferidos o toque na thumbnail da home e no título da biblioteca iniciando a reprodução, o player nos temas Claro e Escuro, e a abertura do menu e da fila. A preferência Claro selecionada no aparelho foi restaurada após a conferência.
+
 Referência técnica: [MediaSessionService e reprodução em segundo plano](https://developer.android.com/media/media3/session/background-playback).
+
+
+## Cancelamento, filtros e notificações
+
+Downloads tem filtros separados para **Em andamento**, **Com erro**, **Concluídos** e **Cancelados**. Cada filtro consulta os estados correspondentes em ordem estável; a paginação termina no último registro. **Cancelar todos** fica disponível na fila e na notificação, e cada transferência também pode ser cancelada individualmente. O cancelamento é persistente, encerra a execução nativa e preserva os arquivos concluídos.
+
+Nos filtros **Com erro** e **Cancelados**, **Tentar todos novamente** reenvia todos os itens elegíveis do filtro, inclusive os que ainda não foram carregados pela paginação. **Selecionar** ativa checkboxes e um botão fixo de **Tentar selecionados novamente**; a seleção permanece ao rolar a lista. O reenvio é transacional, remove IDs repetidos e confere o estado atual de cada item, preservando downloads concluídos ou em andamento. Os cliques ficam bloqueados durante o envio e a tela abre a fila ao terminar.
+
+Validação do retry em lote em 07/11/2026: 50 testes JVM e seis testes instrumentados aprovados, build otimizado e lint sem erros. Conferidos retry de 350 falhas além dos 80 registros da primeira página, seleção com 750 IDs, exclusão de duplicados e proteção de estados concluídos, ativos e cancelados durante o agendamento. Na interface do celular, a seleção e o botão fixo permaneceram disponíveis após rolar várias páginas; a verificação manteve zero downloads ativos e os 34 arquivos concluídos, sem reenviar o histórico pessoal.
+
+A fila exige internet validada. Ao perder a conexão, a transferência é interrompida e o item aguarda conexão na fila. As tentativas do extrator são limitadas. Notificações individuais mostram etapa e porcentagem quando o tamanho está disponível; playlists mostram **1 de N** e o progresso do vídeo atual. A ordem e o tamanho do lote são persistidos no banco para sobreviver ao reinício. A migração de 2 para 3 adiciona esses dados sem apagar o catálogo.
+
+Validação em 07/11/2026: 47 testes JVM, seis testes instrumentados, build otimizado e lint sem erros. Testados cancelamento persistente, perda de conexão por fluxo controlado, paginação de 350 falhas sem IDs repetidos e ordem do lote após reinício. No celular, a notificação real mostrou **1 de 4** e porcentagem; cancelar a fila encerrou os processos nativos e removeu a notificação. O histórico real de 326 falhas chegou ao último item e permaneceu no fim após novas rolagens. A instalação principal permaneceu com zero downloads ativos e 34 arquivos concluídos. Downloads de teste foram feitos na variante lab e seus arquivos foram removidos.
+
+## Downloads de playlists
+
+O campo da tela inicial aceita links de vídeos e playlists do YouTube, incluindo YouTube Music e links compartilhados de vídeos com `list=`. Quando há uma playlist no link, o Spix consulta a lista completa com o extrator já embarcado, mostra o título e a lista com carregamento visual sob demanda de todos os vídeos disponíveis. O nome pode ser alterado antes de **Confirmar playlist e baixar**. Somente a confirmação cria a playlist local e agenda os downloads; uma nova confirmação do mesmo link atualiza o agrupamento sem duplicá-lo. A confirmação informa a pasta de destino e a qualidade de até 720p com áudio.
+
+Cada vídeo disponível recebe uma entrada persistente na fila, com progresso, cancelamento e nova tentativa individuais. Um único consumidor executa as transferências; não é criado um worker para cada vídeo. IDs repetidos na playlist e vídeos já na fila ou concluídos não são duplicados; itens com falha ou cancelados podem ser enviados novamente. Itens privados, excluídos ou identificados como restritos na listagem são ignorados e informados na prévia. Restrições descobertas ao baixar ficam como erro no respectivo vídeo e não impedem os demais downloads. Uma falha ao agendar um item também não interrompe a inclusão dos seguintes; o link é preservado para repetir a tentativa.
+
+A consulta da playlist pode ser refeita em caso de erro e é cancelada quando o link muda. Ela compartilha a exclusão mútua do motor nativo com os downloads, portanto aguarda a transferência atual antes de consultar o YouTube. Não há limite fixo de quantidade de vídeos; paginação é feita pelo extrator. Permanecem os limites de 2 GB por vídeo e a ausência de suporte a lives e conteúdos que exigem autenticação.
+
+Validação desta etapa: 28 testes JVM, build debug e lint passaram. No Galaxy A52 conectado via USB, uma playlist pública com 29 vídeos carregou a prévia e uma segunda playlist com 4 vídeos completou os quatro downloads (8:36, 6:02, 2:42 e 2:34), cada um com URI local e estado concluído. Os quatro registros e arquivos usados no teste foram removidos. Os testes de armazenamento no aparelho tiveram três aprovações e um caso SAF ignorado, por não haver pasta personalizada selecionada. O runner desinstalou o app ao finalizar: a versão final foi reinstalada, o registro da biblioteca anterior foi restaurado a partir do vídeo preservado e sua reprodução foi conferida; as preferências locais voltaram ao padrão. Antes de executar novamente testes conectados em um aparelho pessoal, salvar os dados locais do app e verificar a política de desinstalação do runner.
+
+
+## Layout aprovado no FigCraft
+
+As telas de início, prévia de link, downloads, biblioteca, busca, validação e opções acompanham a referência compartilhada. O mapeamento dos frames, as adaptações para dados reais e as diferenças de comportamento estão em [`design/layout-implementation.md`](design/layout-implementation.md). A home observa a fila persistente e apresenta o download em andamento com progresso real; tocar nele abre a aba Em andamento. A prévia agora é uma tela própria antes de iniciar a gravação. Player e miniplayer foram preservados.
+
+Após a revisão visual, o usuário solicitou manter o campo de links anterior (OutlinedTextField com ícone de busca), a barra inferior Material 3 com os ícones originais e a engrenagem de configurações no cabeçalho. Esses três elementos foram restaurados; o progresso na home e as demais melhorias de layout permanecem.
+
+## Player no formato YouTube
+
+O player abre com vídeo em 16:9 no topo, preservando a proporção original sem recortar a imagem. Os controles de anterior, reproduzir/pausar e próximo ficam sobre o vídeo; um toque mostra ou oculta os controles, que desaparecem após quatro segundos durante a reprodução. A posição fica na barra de progresso, e o botão de tela cheia abre o vídeo em uma superfície própria com espaço para as barras do Android.
+
+A fila fica visível abaixo do título, com miniaturas horizontais, canal, posição na fila e destaque para o vídeo atual. Tocar em um item troca a reprodução sem fechar a lista. A fila pode ser recolhida e reaberta; repetição e reprodução aleatória continuam disponíveis no cabeçalho. O menu do vídeo permite ouvir somente o áudio, voltar ao vídeo, reiniciar e encerrar a reprodução.
+
+Colada na borda inferior do vídeo, como no YouTube, a barra de progresso e a onda são desenhadas juntas sobre a imagem, sem faixa preta abaixo do player: a parte já reproduzida fica na cor de destaque do tema, a parte restante em branco suave, e a onda inteira pulsa com o volume real do áudio em tempo real. O marcador de posição e o divisor da onda compartilham a mesma coordenada, então ficam sempre alinhados; arrastar sobre a onda também executa a busca. O nível é medido por um processador de áudio passivo encadeado no pipeline do Media3, sem alterar a reprodução; a forma da onda é determinística por vídeo e a animação pausa quando a reprodução para. Um gradiente sutil garante contraste da barra sobre vídeos claros.
+
+Verificação em 07/11/2026: build debug, 28 testes JVM e lint aprovados. Reprodução local e troca pela fila conferidas no celular conectado, com os 19 registros da biblioteca preservados.
+
+Verificação em 10/11/2026: build debug instalado no aparelho conectado, 57 testes JVM e lint aprovados. Reprodução iniciada pela biblioteca com a onda visível sobre a barra de progresso e o áudio ativo pelo pipeline do Media3. Nesta mesma data, após o ajuste de alinhamento: a onda e a barra passaram a ser desenhadas no mesmo canvas sobrepondo o vídeo até a borda inferior, com o indicador e o divisor alinhados; a hierarquia de interface confirmou o slider ocupando a largura total e terminando exatamente na borda do vídeo, com reprodução ativa e sem travamentos. Captura real: [`design/android-player-onda.png`](design/android-player-onda.png).
+
+## Playlists locais
+
+Na aba **Playlists → Criar playlist**, a tela de criação permite informar um nome, buscar e selecionar vídeos ou músicas baixados. Editar permite renomear a playlist e adicionar ou remover membros. Playlists vazias são permitidas. Excluir uma playlist pede confirmação e mantém os arquivos da biblioteca. Os agrupamentos e a ordem dos itens são persistidos no banco Room do catálogo. A criação e a edição permitem escolher a thumbnail de qualquer vídeo selecionado para ser a capa. Não há seleção de imagens da galeria. Sem escolha manual, usamos a primeira thumbnail disponível; se o vídeo escolhido sair da playlist ou for excluído, a capa volta ao modo automático. A migração do banco de 1 para 2 adiciona a capa sem apagar o catálogo existente.
+
+Correção de capas em 07/11/2026: a capa é a thumbnail de um vídeo pertencente à playlist. O seletor mostra somente os vídeos selecionados, incluindo itens pendentes de download. A escolha é preservada ao reimportar a playlist e volta ao modo automático ao remover ou excluir o vídeo usado na capa. Quatro testes instrumentados passaram; escolha de uma thumbnail diferente da primeira e exibição da capa salva foram conferidas no celular. A playlist de validação foi removida, preservando os 19 vídeos.
+
+O menu de três pontinhos dos vídeos no início, biblioteca, busca, detalhe da playlist e downloads concluídos oferece **Salvar na playlist**. A folha permite incluir ou remover o vídeo em várias playlists e criar uma nova com ele já selecionado. O painel de opções também mostra tamanho real em bytes, arquivo, duração, formato, resolução, taxas, codecs, metadados embutidos disponíveis, pasta, datas, link de origem e URI. A leitura ocorre fora da thread de interface e dados ausentes não são inventados. A exclusão pede confirmação e também remove o arquivo do celular, com solicitação do Android quando necessária. As alterações de membros são transacionais e não duplicam vídeos.
+
+Na home, o seletor de ícones ao lado do título da biblioteca alterna entre cards com miniatura ampla e lista compacta. O controle tem borda discreta e destaque neutro na opção ativa. A escolha é salva nas configurações locais. Os itens não exibem mais o ícone de check circular.
+
+Validação da revisão de navegação e playlists em 07/11/2026: APK otimizado gerado, 40 testes JVM aprovados, lint sem erros e teste instrumentado de membros aprovado no Galaxy A52. Conferidos os dois layouts da home, criação, busca e edição, seleção pelo menu, pré-seleção ao criar a partir de um vídeo e persistência após reabrir. A playlist de teste foi excluída e os 19 itens da biblioteca foram preservados.
+
+Validação de capas, detalhes, importação e exclusão em 07/11/2026: 43 testes JVM e quatro testes instrumentados aprovados, APK otimizado gerado e lint sem erros. A migração preservou registros e ordem; a importação preservou a capa personalizada e não duplicou vídeos. No celular, conferidos escolha e exibição da capa, detalhes reais de um MP4, exclusão do arquivo de teste pela interface e remoção de seus membros nas playlists. A prévia de uma playlist pública mostrou os quatro vídeos e aceitou outro nome, sem criar downloads antes da confirmação. Os 19 vídeos da instalação principal foram preservados; os testes de exclusão usaram arquivos temporários na variante lab.
+
+Reproduzir playlist ou tocar em um item dentro dela monta a fila exclusivamente com seus arquivos disponíveis, na ordem salva. O player mostra o nome da playlist e mantém próximo, anterior, aleatório e repetição dentro dessa fila. Abrir um arquivo pela biblioteca geral volta a montar a fila da biblioteca, mesmo se for o mesmo vídeo que já estava tocando.
+
+Validação em 07/11/2026: 33 testes JVM, build e lint aprovados. No celular, conferidos criação com dois vídeos, fila restrita, edição para um vídeo, persistência após encerrar o processo e exclusão do agrupamento. A playlist de teste foi removida e os 19 registros originais da biblioteca permaneceram idênticos.
+
+## Catálogos com mil vídeos
+
+A implementação de paginação, migração e fila limitada está documentada em [docs/performance.md](docs/performance.md), junto dos comandos de teste e benchmark isolado.
+
+
+## Continuidade dos downloads com tela apagada
+
+A fila iniciada pelo usuário agora pertence a um serviço foreground de download, independente da tela do app. Ele mantém um wake lock durante as transferências e uma notificação compartilhada, que é removida ao terminar, cancelar ou interromper o trabalho. Ao abrir o app, notificações antigas de downloads sem fila ativa também são limpas. O WorkManager continua responsável pelas retomadas persistentes quando o Android interrompe o serviço ou nega sua inicialização em segundo plano.
+
+Erros de socket, timeout, bloqueio de serviço em segundo plano e respostas temporárias do servidor devolvem o vídeo à fila e interrompem o consumo para uma tentativa com backoff. Assim, uma interrupção do sistema não transforma os vídeos seguintes em falhas. Vídeos indisponíveis e outros erros definitivos continuam no filtro Com erro. Fechar a tela do app ou bloquear o celular não cancela a fila; forçar a parada do aplicativo pelo Android exige abri-lo novamente.
+
+Em Configurações há uma seção de downloads em segundo plano com o estado da otimização de bateria e acesso às configurações do Android. Se o aparelho entrar em Doze sem permitir o uso de bateria sem restrição, a fila aguarda a conexão voltar. No Android 15 ou superior, o limite de tempo do serviço dataSync também é tratado com preservação da fila. Referências: [Doze e App Standby](https://developer.android.com/training/monitoring-device-state/doze-standby) e [limites de serviços foreground](https://developer.android.com/develop/background-work/services/fgs/timeout).
+
+A seleção nos downloads tem checkbox na extremidade direita, afastado da thumbnail, mantendo o card inteiro como área de seleção. Cards com erro ou cancelados usam uma superfície neutra sem contorno forte; a seleção mantém o destaque de fundo.
+
+Validação em 07/11/2026: 52 testes JVM aprovados, build lab e otimizado e lint sem erros. No Galaxy A52 (Android 14), dois downloads reais terminaram após sair do app e apagar a tela; a notificação desapareceu ao concluir. Outro teste instrumentado confirmou o estado de erro e a remoção da notificação após uma URL inválida. Os testes usaram exclusivamente a variante lab e removeram os registros e arquivos temporários ao terminar.
+
+Conferência visual no Galaxy A52 desbloqueado: checkbox à direita, thumbnail separada e cards sem contorno forte no tema escuro. Selecionar pelo corpo do card atualizou o destaque e a contagem; a seleção permaneceu ao rolar. A seleção foi cancelada ao encerrar a conferência, sem reenviar downloads.

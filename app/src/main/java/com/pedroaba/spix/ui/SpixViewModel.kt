@@ -4,6 +4,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pedroaba.spix.data.SpixRepository
+import com.pedroaba.spix.domain.YouTubePlaylistLink
+import com.pedroaba.spix.data.PlaylistMetadataSource
 import com.pedroaba.spix.domain.YouTubeLink
 import com.pedroaba.spix.domain.VideoPreviewState
 import com.pedroaba.spix.domain.DownloadStatus
@@ -12,6 +14,7 @@ import com.pedroaba.spix.data.MetadataHttpException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CancellationException
@@ -20,19 +23,27 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 sealed interface SpixEvent {
     data class Message(val text: String) : SpixEvent
-    data object LinkQueued : SpixEvent
+    data class LinkQueued(val message: String) : SpixEvent
+    data class Removed(val videoId: String) : SpixEvent
+    data class DeleteConsent(val sender: android.content.IntentSender) : SpixEvent
 }
 
-class SpixViewModel(private val repository: SpixRepository, private val saved: SavedStateHandle, private val metadata: VideoMetadataSource, private val downloads: com.pedroaba.spix.download.DownloadScheduler) : ViewModel() {
+class SpixViewModel(private val repository: SpixRepository, private val saved: SavedStateHandle, private val metadata: VideoMetadataSource, private val downloads: com.pedroaba.spix.download.DownloadScheduler, private val playlists: PlaylistMetadataSource,
+    private val savePlaylist: suspend (com.pedroaba.spix.domain.PlaylistMetadata) -> Unit = {},
+    private val deleteFile: suspend (String) -> Unit = { error("O armazenamento não está disponível.") }) : ViewModel() {
     val link = saved.getStateFlow("link", "")
     val query = saved.getStateFlow("query", "")
-    val requests = repository.requests
-    val tracks = repository.tracks
+    val playlistName = saved.getStateFlow("playlistName", "")
+    fun updatePlaylistName(value: String) { saved["playlistName"] = value }
     private val mutableError = MutableStateFlow<String?>(null)
     val error = mutableError.asStateFlow()
+    private val mutableRetryBusy = MutableStateFlow(false)
+    val retryBusy = mutableRetryBusy.asStateFlow()
     private val mutableBusy = MutableStateFlow(false)
     val busy = mutableBusy.asStateFlow()
     private val mutablePreview = MutableStateFlow<VideoPreviewState>(VideoPreviewState.Idle)
@@ -41,89 +52,120 @@ class SpixViewModel(private val repository: SpixRepository, private val saved: S
     private val eventChannel = Channel<SpixEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 
-    init { YouTubeLink.parse(link.value)?.let { lookup(it) } }
+    private fun inputKey(value: String): String? = YouTubePlaylistLink.parse(value)?.let { "playlist:${it.playlistId}" }
+        ?: YouTubeLink.parse(value)?.let { "video:${it.videoId}" }
+
+    init { if (inputKey(link.value) != null) lookup() }
 
     fun updateLink(value: String) {
+        val previous = inputKey(link.value)
         saved["link"] = value
         mutableError.value = null
-        val parsed = YouTubeLink.parse(value)
-        val currentId = when (val state = preview.value) {
-            is VideoPreviewState.Ready -> state.video.videoId
-            is VideoPreviewState.Loading -> state.videoId
-            is VideoPreviewState.Failed -> state.videoId
-            VideoPreviewState.Idle -> null
-        }
-        if (parsed != null && parsed.videoId == currentId) return
+        if (previous != null && previous == inputKey(value)) return
         lookupJob?.cancel()
         mutablePreview.value = VideoPreviewState.Idle
-        if (parsed != null) lookup(parsed, debounceMillis = 600)
+        if (inputKey(value) != null) lookup(debounceMillis = 600)
     }
 
     fun searchVideo() {
         if (mutableBusy.value || !validateLink()) return
-        YouTubeLink.parse(link.value)?.let { lookup(it) }
+        lookup()
     }
 
-    private fun lookup(parsed: YouTubeLink, debounceMillis: Long = 0) {
+    private fun lookup(debounceMillis: Long = 0) {
+        val input = link.value
+        val key = inputKey(input) ?: return
         lookupJob?.cancel()
-        mutablePreview.value = VideoPreviewState.Loading(parsed.videoId)
+        mutablePreview.value = VideoPreviewState.Loading(key)
         lookupJob = viewModelScope.launch {
             try {
                 delay(debounceMillis)
-                val video = metadata.fetch(parsed)
+                val playlist = YouTubePlaylistLink.parse(input)
+                val result = if (playlist != null) VideoPreviewState.PlaylistReady(playlists.fetchPlaylist(playlist))
+                    else VideoPreviewState.Ready(metadata.fetch(requireNotNull(YouTubeLink.parse(input))))
                 ensureActive()
-                if (YouTubeLink.parse(link.value)?.videoId == parsed.videoId) mutablePreview.value = VideoPreviewState.Ready(video)
+                if (inputKey(link.value) == key) {
+                    if (result is VideoPreviewState.PlaylistReady && saved.get<String>("playlistNameKey") != key) {
+                        saved["playlistNameKey"] = key
+                        saved["playlistName"] = result.playlist.title
+                    }
+                    mutablePreview.value = result
+                }
+            } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+                ensureActive()
+                if (inputKey(link.value) == key) mutablePreview.value = VideoPreviewState.Failed(key, "O YouTube demorou para responder. Tente novamente.")
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 ensureActive()
-                if (YouTubeLink.parse(link.value)?.videoId == parsed.videoId) {
-                    val message = when (error) {
-                        is UnknownHostException -> "Não foi possível conectar. Confira sua internet e tente novamente."
-                        is SocketTimeoutException -> "O YouTube demorou para responder. Tente novamente."
-                        is MetadataHttpException -> when (error.status) {
+                if (inputKey(link.value) == key) {
+                    val message = when {
+                        error is UnknownHostException -> "Não foi possível conectar. Confira sua internet e tente novamente."
+                        error is SocketTimeoutException -> "O YouTube demorou para responder. Tente novamente."
+                        YouTubePlaylistLink.parse(input) != null -> "Não foi possível carregar a playlist. Confira se ela é pública ou não listada e contém vídeos disponíveis. Tente novamente."
+                        error is MetadataHttpException -> when (error.status) {
                             400, 401, 403, 404 -> "Não foi possível acessar os dados. Confira se o link aponta para um vídeo público e disponível."
                             429 -> "Muitas consultas no momento. Aguarde um pouco e tente novamente."
                             else -> "O YouTube não respondeu como esperado. Tente novamente."
                         }
                         else -> "Não foi possível buscar os dados. Confira sua conexão e tente novamente."
                     }
-                    mutablePreview.value = VideoPreviewState.Failed(parsed.videoId, message)
+                    mutablePreview.value = VideoPreviewState.Failed(key, message)
                 }
             }
         }
     }
     fun updateQuery(value: String) { saved["query"] = value }
     fun validateLink(): Boolean {
-        val valid = YouTubeLink.parse(link.value) != null
-        mutableError.value = if (valid) null else "Use um link válido de um vídeo do YouTube."
+        val valid = inputKey(link.value) != null
+        mutableError.value = if (valid) null else "Use um link válido de vídeo ou playlist do YouTube."
         return valid
     }
 
     fun enqueue() {
         if (mutableBusy.value || !validateLink()) return
-        val parsed = YouTubeLink.parse(link.value) ?: return
+        val key = inputKey(link.value) ?: return
+        val playlist = (preview.value as? VideoPreviewState.PlaylistReady)?.playlist?.copy(title = playlistName.value.trim())
+        if (playlist != null && playlist.title.isBlank()) {
+            viewModelScope.launch { eventChannel.send(SpixEvent.Message("Dê um nome à playlist antes de confirmar.")) }
+            return
+        }
         val video = (preview.value as? VideoPreviewState.Ready)?.video
-        if (video == null || video.videoId != parsed.videoId) { searchVideo(); return }
+        val videos = when {
+            playlist != null && key == "playlist:${playlist.playlistId}" -> playlist.videos
+            video != null && key == "video:${video.videoId}" -> listOf(video)
+            else -> { searchVideo(); return }
+        }
         mutableBusy.value = true
         viewModelScope.launch {
+            var added = 0
+            var failed = 0
+            var enqueuedIds = emptyList<String>()
             try {
-                val added = repository.enqueue(video)
-                val existing = requests.value.firstOrNull { it.videoId == video.videoId }
-                if (existing?.status != DownloadStatus.Completed) {
-                    try { downloads.start(video.videoId) }
-                    catch (cancelled: CancellationException) { throw cancelled }
-                    catch (error: Exception) {
-                        repository.updateDownload(video.videoId) { it.copy(status = DownloadStatus.Failed, error = "Não foi possível iniciar. Tente novamente.") }
-                        throw error
-                    }
+                try {
+                    val ids = repository.enqueueBatch(videos)
+                    enqueuedIds = ids
+                    if (playlist != null) savePlaylist(playlist)
+                    val failures = if (ids.isEmpty()) emptySet() else if (playlist != null) downloads.startPlaylist(ids, playlist.title) else downloads.startBatch(ids)
+                    for (id in failures) repository.updateDownload(id) { it.copy(status = DownloadStatus.Failed, error = "Não foi possível iniciar. Tente novamente.") }
+                    added = ids.size - failures.size
+                    failed = failures.size
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) {
+                    for (id in enqueuedIds) repository.updateDownload(id) { it.copy(status = DownloadStatus.Failed, error = "Não foi possível iniciar. Tente novamente.") }
+                    failed = if (enqueuedIds.isEmpty()) videos.size else enqueuedIds.size
                 }
-                if (added) {
-                    if (YouTubeLink.parse(link.value)?.videoId == video.videoId) updateLink("")
-                    eventChannel.send(SpixEvent.LinkQueued)
-                } else eventChannel.send(SpixEvent.Message("Este vídeo já está nos seus downloads."))
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { eventChannel.send(SpixEvent.Message("Não foi possível salvar o link. Tente novamente.")) }
-            finally { mutableBusy.value = false }
+                val message = when {
+                    failed > 0 -> "Downloads adicionados: $added. Falhas ao adicionar: $failed. Tente novamente."
+                    added == 0 -> if (playlist != null) "Playlist criada. Os vídeos já estão nos seus downloads." else "Este vídeo já está nos seus downloads."
+                    playlist == null -> "Download adicionado à fila."
+                    added == 1 -> "1 vídeo da playlist adicionado à fila."
+                    else -> "Playlist criada. $added vídeos adicionados à fila."
+                }
+                if (added > 0 || (playlist != null && failed == 0)) {
+                    if (failed == 0 && inputKey(link.value) == key) updateLink("")
+                    eventChannel.send(SpixEvent.LinkQueued(message))
+                } else eventChannel.send(SpixEvent.Message(message))
+            } finally { mutableBusy.value = false }
         }
     }
 
@@ -132,6 +174,7 @@ class SpixViewModel(private val repository: SpixRepository, private val saved: S
     }
 
     fun retry(videoId: String) {
+        if (mutableRetryBusy.value) return
         viewModelScope.launch {
             try {
                 repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Queued, progress = 0, error = null, transfer = null) }
@@ -141,6 +184,36 @@ class SpixViewModel(private val repository: SpixRepository, private val saved: S
                 repository.updateDownload(videoId) { it.copy(status = DownloadStatus.Failed, error = "Não foi possível iniciar. Tente novamente.") }
                 eventChannel.send(SpixEvent.Message("Não foi possível iniciar o download."))
             }
+        }
+    }
+
+    fun retryDownloads(filter: com.pedroaba.spix.data.DownloadFilter, selectedIds: List<String>?) {
+        if (mutableRetryBusy.value || filter !in listOf(com.pedroaba.spix.data.DownloadFilter.Failed, com.pedroaba.spix.data.DownloadFilter.Cancelled)) return
+        mutableRetryBusy.value = true
+        viewModelScope.launch {
+            var ids = emptyList<String>()
+            try {
+                ids = repository.retryDownloads(filter, selectedIds)
+                if (ids.isEmpty()) {
+                    eventChannel.send(SpixEvent.Message("Nenhum item deste filtro precisa de nova tentativa."))
+                    return@launch
+                }
+                val failed = if (ids.size == 1) downloads.startBatch(ids) else downloads.startPlaylist(ids, "Novas tentativas")
+                for (id in failed) repository.updateDownload(id) {
+                    if (it.status == DownloadStatus.Queued) it.copy(status = DownloadStatus.Failed, error = "Não foi possível iniciar. Tente novamente.") else it
+                }
+                val count = ids.size - failed.size
+                val message = if (failed.isEmpty()) "$count ${if (count == 1) "download adicionado" else "downloads adicionados"} novamente à fila."
+                    else "$count adicionados à fila; ${failed.size} não puderam ser iniciados."
+                if (count > 0) eventChannel.send(SpixEvent.LinkQueued(message))
+                else eventChannel.send(SpixEvent.Message(message))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                for (id in ids) repository.updateDownload(id) {
+                    if (it.status == DownloadStatus.Queued) it.copy(status = DownloadStatus.Failed, error = "Não foi possível iniciar. Tente novamente.") else it
+                }
+                eventChannel.send(SpixEvent.Message("Não foi possível reenviar os downloads. Tente novamente."))
+            } finally { mutableRetryBusy.value = false }
         }
     }
 
@@ -154,11 +227,92 @@ class SpixViewModel(private val repository: SpixRepository, private val saved: S
         }
     }
 
-    fun remove(videoId: String) {
+    fun cancelAllDownloads() {
         viewModelScope.launch {
-            try { downloads.cancel(videoId); repository.removeRequest(videoId) }
+            try { downloads.cancelAll(); eventChannel.send(SpixEvent.Message("Todos os downloads pendentes foram cancelados.")) }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { eventChannel.send(SpixEvent.Message("Não foi possível remover o item.")) }
+            catch (_: Exception) { eventChannel.send(SpixEvent.Message("Não foi possível cancelar toda a fila. Tente novamente.")) }
         }
+    }
+    private val removals = mutableSetOf<String>()
+    private val removalMutex = Mutex()
+    private val mutableRemovalBusy = MutableStateFlow(false)
+    val removalBusy = mutableRemovalBusy.asStateFlow()
+    private var pendingDeletionResult: CompletableDeferred<Boolean>? = null
+
+    fun remove(videoId: String) = removeMany(listOf(videoId))
+
+    fun removeMany(videoIds: List<String>) {
+        val ids = videoIds.filter(removals::add)
+        if (ids.isEmpty()) return
+        mutableRemovalBusy.value = true
+        viewModelScope.launch {
+            try {
+                removalMutex.withLock {
+                    var deleted = 0
+                    var declined = false
+                    for (id in ids) {
+                        try {
+                            downloads.cancel(id)
+                            val uri = repository.get(id)?.localUri
+                            if (uri != null && !deleteWithConsent(id, uri)) {
+                                declined = true
+                                break
+                            }
+                            repository.removeRequest(id)
+                            eventChannel.send(SpixEvent.Removed(id))
+                            deleted++
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            // Keep the catalog entry when its file could not be removed.
+                        }
+                    }
+                    val message = when {
+                        ids.size == 1 && deleted == 1 -> "Item excluído do celular."
+                        ids.size == 1 && declined -> "Exclusão cancelada. O item foi mantido."
+                        ids.size == 1 -> "Não foi possível excluir o arquivo. O item foi mantido; confira o acesso à pasta e tente novamente."
+                        deleted == ids.size -> "$deleted itens excluídos do celular."
+                        declined -> "Exclusão cancelada. $deleted de ${ids.size} itens excluídos."
+                        else -> "$deleted de ${ids.size} itens excluídos. Os demais foram mantidos."
+                    }
+                    eventChannel.send(SpixEvent.Message(message))
+                }
+            } finally {
+                removals.removeAll(ids.toSet())
+                mutableRemovalBusy.value = removals.isNotEmpty()
+            }
+        }
+    }
+
+    private suspend fun deleteWithConsent(id: String, uri: String): Boolean {
+        try {
+            deleteFile(uri)
+        } catch (consent: com.pedroaba.spix.data.FileDeletionConsent) {
+            val result = CompletableDeferred<Boolean>()
+            pendingDeletionResult = result
+            saved["pendingDeletion"] = id
+            val approved = try {
+                eventChannel.send(SpixEvent.DeleteConsent(consent.sender))
+                result.await()
+            } finally {
+                pendingDeletionResult = null
+                saved["pendingDeletion"] = null
+            }
+            if (!approved) return false
+            deleteFile(uri)
+        }
+        return true
+    }
+
+    fun deletionConsentResult(approved: Boolean) {
+        pendingDeletionResult?.let {
+            it.complete(approved)
+            return
+        }
+        val id = saved.get<String>("pendingDeletion") ?: return
+        saved["pendingDeletion"] = null
+        if (approved) remove(id)
+        else viewModelScope.launch { eventChannel.send(SpixEvent.Message("Exclusão cancelada. O item foi mantido.")) }
     }
 }

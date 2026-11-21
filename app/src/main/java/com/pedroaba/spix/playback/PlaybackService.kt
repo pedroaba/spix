@@ -3,7 +3,6 @@ package com.pedroaba.spix.playback
 import android.app.PendingIntent
 import android.content.Intent
 import androidx.media3.common.AudioAttributes
-import androidx.media3.common.Player
 import androidx.media3.common.C
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
@@ -34,9 +33,12 @@ class PlaybackService : MediaSessionService() {
         if (controllerInfo.packageName == packageName || controllerInfo.isTrusted) session else null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val player = session?.player
-        if (player == null || !player.playWhenReady || player.mediaItemCount == 0 ||
-            player.playbackState == Player.STATE_ENDED || player.playbackState == Player.STATE_IDLE) stopSelf()
+        // Dismissing the app ends playback only; downloads own a separate service.
+        session?.player?.run {
+            stop()
+            clearMediaItems()
+        }
+        pauseAllPlayersAndStopSelf()
     }
 
     override fun onDestroy() {

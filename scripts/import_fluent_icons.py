@@ -39,6 +39,12 @@ ICONS = {
     'Shuffle': ('Arrow Shuffle', 'arrow_shuffle', 'regular'),
     'Repeat': ('Arrow Repeat All', 'arrow_repeat_all', 'regular'),
     'Collapse': ('Chevron Down', 'chevron_down', 'regular'),
+    'VideoLibrary': ('Video Clip Multiple', 'video_clip_multiple', 'regular'),
+    'VideoLibraryFilled': ('Video Clip Multiple', 'video_clip_multiple', 'filled'),
+    'GridView': ('Grid', 'grid', 'regular'),
+    'ListView': ('Text Bullet List', 'text_bullet_list', 'regular'),
+    'Sort': ('Arrow Sort', 'arrow_sort', 'regular'),
+    'Add': ('Add', 'add', 'regular'),
     'MoreVertical': ('More Vertical', 'more_vertical', 'regular'),
 }
 

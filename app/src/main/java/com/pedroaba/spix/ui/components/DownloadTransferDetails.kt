@@ -37,7 +37,9 @@ fun DownloadTransferDetails(transfer: DownloadTransfer) {
         if (transfer.percent != null) {
             val fraction = (transfer.downloadedBytes.toDouble() / requireNotNull(transfer.totalBytes)).toFloat().coerceIn(0f, 1f)
             val animated = animateFloatAsState(fraction, tween(250), label = "transferProgress")
-            LinearProgressIndicator(progress = { if (fraction >= 1f) 1f else animated.value }, modifier = Modifier.fillMaxWidth())
+            LinearProgressIndicator(progress = { if (fraction >= 1f) 1f else animated.value }, modifier = Modifier.fillMaxWidth().height(4.dp),
+                color = com.pedroaba.spix.ui.theme.SpixColors.Red, trackColor = MaterialTheme.colorScheme.outline,
+                gapSize = 0.dp, drawStopIndicator = {})
         } else LinearProgressIndicator(Modifier.fillMaxWidth())
     }
 }

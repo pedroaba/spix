@@ -1,5 +1,12 @@
 <resources>
     <style name="Theme.Spix" parent="Theme.Spix.Light" />
+    <style name="Theme.Spix.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/spix_splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_spix_splash_mark</item>
+        <item name="postSplashScreenTheme">@style/Theme.Spix</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
     <style name="Theme.Spix.Light" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>

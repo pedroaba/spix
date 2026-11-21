@@ -25,6 +25,7 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
     fun refreshLocation() { viewModelScope.launch { repository.refreshLocation() } }
     fun setTheme(theme: ThemeMode) = save { repository.setTheme(theme) }
     fun setAnimations(enabled: Boolean) = save { repository.setAnimations(enabled) }
+    fun setHomeCards(enabled: Boolean) = save { repository.setHomeCards(enabled) }
     fun selectFolder(uri: Uri) = save { repository.selectFolder(uri); messages.send("Pasta dos vídeos atualizada.") }
     fun useDefaultFolder() = save { repository.useDefaultFolder(); messages.send("A pasta do Spix será usada nos próximos downloads.") }
     fun pickerUnavailable() { viewModelScope.launch { messages.send("Não foi possível abrir o seletor de pastas neste dispositivo.") } }

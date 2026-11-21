@@ -6,4 +6,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "Spix"
-include(":app")
+include(":app", ":macrobenchmark")

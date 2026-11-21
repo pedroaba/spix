@@ -13,6 +13,7 @@ enum class ThemeMode(val label: String) {
 data class AppSettings(
     val theme: ThemeMode = ThemeMode.System,
     val navigationAnimations: Boolean = true,
+    val homeCards: Boolean = false,
     val videoFolderUri: String? = null,
 )
 
