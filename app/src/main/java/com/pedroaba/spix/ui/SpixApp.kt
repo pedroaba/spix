@@ -149,7 +149,8 @@ fun SpixApp(repository: SpixRepository, settingsRepository: SettingsRepository, 
                     val busy by vm.busy.collectAsStateWithLifecycle()
                     val preview by vm.preview.collectAsStateWithLifecycle()
                     val tracks by vm.tracks.collectAsStateWithLifecycle()
-                    HomeScreen(link, error, busy, preview, motion, tracks.size, vm::updateLink, vm::searchVideo) { showConfirmation = true }
+                    val requests by vm.requests.collectAsStateWithLifecycle()
+                    HomeScreen(link, error, busy, preview, motion, tracks, requests, vm::updateLink, vm::searchVideo) { showConfirmation = true }
                 }
                 composable(Destination.Downloads.name) {
                     val requests by vm.requests.collectAsStateWithLifecycle()
